@@ -278,6 +278,56 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
     return json({ leaderboard: sampleLeaderboard });
   }
 
+  // User management endpoints
+  if (url.pathname.startsWith('/api/user/')) {
+    const userIdFromPath = parseInt(url.pathname.split('/')[3], 10);
+    
+    if (req.method === 'GET') {
+      // Get user data
+      try {
+        const userData = await env.TRADING_KV.get(`user_${userIdFromPath}`);
+        if (!userData) {
+          return json({ error: 'User not found' }, 404);
+        }
+        return json(JSON.parse(userData));
+      } catch (error) {
+        return json({ error: 'Failed to load user data' }, 500);
+      }
+    }
+    
+    if (req.method === 'PUT') {
+      // Update user data
+      try {
+        const userData = await req.json();
+        await env.TRADING_KV.put(`user_${userIdFromPath}`, JSON.stringify(userData));
+        return json({ success: true });
+      } catch (error) {
+        return json({ error: 'Failed to save user data' }, 500);
+      }
+    }
+  }
+  
+  if (url.pathname === '/api/user' && req.method === 'POST') {
+    // Create new user
+    try {
+      const userData = await req.json() as any;
+      const userId = userData.id;
+      
+      // Check if user already exists
+      const existingUser = await env.TRADING_KV.get(`user_${userId}`);
+      if (existingUser) {
+        return json({ error: 'User already exists' }, 409);
+      }
+      
+      // Create new user record
+      await env.TRADING_KV.put(`user_${userId}`, JSON.stringify(userData));
+      
+      return json({ success: true, userId });
+    } catch (error) {
+      return json({ error: 'Failed to create user' }, 500);
+    }
+  }
+
   return json({ error: 'unknown endpoint' }, 404);
 }
 
@@ -318,6 +368,7 @@ function MINIAPP_HTML(env: Env) {
     <title>TradeX Pro - AI Trading Bot</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         * {
@@ -631,6 +682,32 @@ function MINIAPP_HTML(env: Env) {
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
+        .result-details {
+            margin: 15px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        
+        .profit-row, .balance-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 8px 0;
+            padding: 3px 0;
+        }
+        
+        .profit-row span, .balance-row span {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+        
+        .final-balance {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
         .result-icon {
             font-size: 2.5rem;
             margin: 10px 0;
@@ -805,8 +882,21 @@ function MINIAPP_HTML(env: Env) {
         <div class="trade-result" id="tradeResult">
             <div class="result-icon" id="resultIcon">🎉</div>
             <div id="resultText">Congratulations!</div>
-            <div class="live-pnl" id="finalPnl">+$25.50</div>
-            <button class="trade-btn buy-btn" onclick="resetTrade()" style="margin-top: 20px; width: 100%;">
+            <div class="result-details">
+                <div class="profit-row">
+                    <span>Profit:</span>
+                    <div class="live-pnl" id="finalPnl">+$25.50</div>
+                </div>
+                <div class="profit-row">
+                    <span>Return:</span>
+                    <div class="live-percent" id="profitPercent">+2.55%</div>
+                </div>
+                <div class="balance-row">
+                    <span>New Balance:</span>
+                    <div class="final-balance" id="finalBalance">$10,025.50</div>
+                </div>
+            </div>
+            <button class="trade-btn buy-btn" onclick="resetTrade()" style="margin-top: 15px; width: 100%;">
                 Trade Again
             </button>
         </div>
@@ -838,17 +928,130 @@ function MINIAPP_HTML(env: Env) {
     <script>
         // Initialize Telegram WebApp
         const tg = window.Telegram?.WebApp;
-        if (tg) {
-            tg.ready();
-        }
-
-        let userId = tg?.initDataUnsafe?.user?.id || 12345;
+        let telegramUser = null;
+        let userId = 12345; // Default for demo
         let currentTrade = null;
         let priceChart = null;
         let liveChart = null;
         let userData = { balance: 10000, trades: [], stats: { total: 0, wins: 0, profit: 0 } };
 
-        // Initialize charts
+        // Initialize Telegram WebApp
+        function initTelegramAuth() {
+            if (tg) {
+                tg.ready();
+                tg.expand();
+                
+                // Get user data from Telegram
+                if (tg.initDataUnsafe?.user) {
+                    telegramUser = tg.initDataUnsafe.user;
+                    userId = telegramUser.id;
+                    
+                    // Update header with user info
+                    updateUserDisplay();
+                    
+                    // Load user data from server
+                    loadUserData();
+                } else {
+                    // Running outside Telegram - use demo mode
+                    console.log('Running in demo mode outside Telegram');
+                }
+                
+                // Set main button for quick actions
+                tg.MainButton.setText('💰 Quick Deposit $100');
+                tg.MainButton.onClick(() => quickDeposit(100));
+                tg.MainButton.show();
+            }
+        }
+        
+        // Update UI with user information
+        function updateUserDisplay() {
+            if (telegramUser) {
+                const headerEl = document.querySelector('.header h1');
+                const userInfoEl = document.querySelector('.header p');
+                
+                headerEl.textContent = '🚀 Welcome ' + (telegramUser.first_name || 'Trader');
+                userInfoEl.textContent = 'AI Trading Bot • @' + (telegramUser.username || 'User');
+            }
+        }
+        
+        // Load user-specific data
+        async function loadUserData() {
+            if (!userId || userId === 12345) return;
+            
+            try {
+                const response = await fetch('/api/user/' + userId);
+                if (response.ok) {
+                    const serverUserData = await response.json();
+                    userData = { ...userData, ...serverUserData };
+                    
+                    // Update balance display
+                    document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
+                    updateStats();
+                } else {
+                    // New user - create account
+                    await createUserAccount();
+                }
+            } catch (error) {
+                console.error('Error loading user data:', error);
+            }
+        }
+        
+        // Create new user account
+        async function createUserAccount() {
+            if (!telegramUser) return;
+            
+            const newUserData = {
+                id: userId,
+                telegramData: telegramUser,
+                balance: 10000, // Starting balance
+                trades: [],
+                stats: { total: 0, wins: 0, profit: 0 },
+                createdAt: new Date().toISOString()
+            };
+            
+            try {
+                const response = await fetch('/api/user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newUserData)
+                });
+                
+                if (response.ok) {
+                    userData = newUserData;
+                    console.log('User account created successfully');
+                }
+            } catch (error) {
+                console.error('Error creating user account:', error);
+            }
+        }
+        
+        // Save user data to server
+        async function saveUserData() {
+            if (!userId || userId === 12345) return;
+            
+            try {
+                await fetch('/api/user/' + userId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(userData)
+                });
+            } catch (error) {
+                console.error('Error saving user data:', error);
+            }
+        }
+        
+        // Quick deposit function
+        function quickDeposit(amount) {
+            userData.balance += amount;
+            document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
+            saveUserData();
+            
+            if (tg) {
+                tg.showAlert('Successfully deposited $' + amount + '!');
+            }
+        }
+
+        // Initialize charts with trade marker support
         async function initCharts() {
             const chartCtx = document.getElementById('priceChart').getContext('2d');
             priceChart = new Chart(chartCtx, {
@@ -863,13 +1066,43 @@ function MINIAPP_HTML(env: Env) {
                         borderWidth: 2,
                         tension: 0.4,
                         fill: true
+                    }, {
+                        label: 'Trade Entry',
+                        data: [],
+                        borderColor: '#FFD700',
+                        backgroundColor: '#FFD700',
+                        pointRadius: 8,
+                        pointHoverRadius: 10,
+                        showLine: false,
+                        pointStyle: 'triangle'
+                    }, {
+                        label: 'Trade Exit',
+                        data: [],
+                        borderColor: '#FF6B6B',
+                        backgroundColor: '#FF6B6B',
+                        pointRadius: 8,
+                        pointHoverRadius: 10,
+                        showLine: false,
+                        pointStyle: 'rect'
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { display: false }
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.datasetIndex === 1) {
+                                        return 'Entry: $' + context.parsed.y.toLocaleString();
+                                    } else if (context.datasetIndex === 2) {
+                                        return 'Exit: $' + context.parsed.y.toLocaleString();
+                                    }
+                                    return 'Price: $' + context.parsed.y.toLocaleString();
+                                }
+                            }
+                        }
                     },
                     scales: {
                         x: { display: false },
@@ -880,6 +1113,22 @@ function MINIAPP_HTML(env: Env) {
                     }
                 }
             });
+        }
+        
+        // Add trade markers to chart
+        function addTradeMarker(price, type, time) {
+            if (!priceChart) return;
+            
+            const datasetIndex = type === 'entry' ? 1 : 2;
+            const timeLabel = new Date(time).toLocaleTimeString();
+            
+            // Add marker to chart
+            priceChart.data.datasets[datasetIndex].data.push({
+                x: priceChart.data.labels.length - 1,
+                y: price
+            });
+            
+            priceChart.update('none');
         }
 
         // Fetch real price data
@@ -966,6 +1215,9 @@ function MINIAPP_HTML(env: Env) {
                 // Display entry price
                 document.getElementById('entryPrice').textContent = '$' + currentTrade.entryPrice.toLocaleString();
                 
+                // Add trade entry marker to chart
+                addTradeMarker(currentTrade.entryPrice, 'entry', Date.now());
+                
                 // Start 20-second countdown with enhanced progress
                 startTradeCountdown(currentTrade);
                 
@@ -1048,8 +1300,11 @@ function MINIAPP_HTML(env: Env) {
             }, 1000);
         }
 
-        // Finalize trade
-        function finalizeTrade(trade, finalPnl) {
+        // Finalize trade with enhanced result display
+        function finalizeTrade(trade, finalPnl, finalPrice) {
+            // Add trade exit marker to chart
+            addTradeMarker(finalPrice, 'exit', Date.now());
+            
             // Hide progress, show result
             document.getElementById('tradeProgress').style.display = 'none';
             document.getElementById('tradeResult').style.display = 'block';
@@ -1057,7 +1312,15 @@ function MINIAPP_HTML(env: Env) {
             const resultIconEl = document.getElementById('resultIcon');
             const resultTextEl = document.getElementById('resultText');
             const finalPnlEl = document.getElementById('finalPnl');
+            const finalBalanceEl = document.getElementById('finalBalance');
+            const profitPercentEl = document.getElementById('profitPercent');
             
+            // Calculate percentage
+            const percentChange = trade.direction === 'BUY' ? 
+                ((finalPrice - trade.entryPrice) / trade.entryPrice) * 100 :
+                ((trade.entryPrice - finalPrice) / trade.entryPrice) * 100;
+            
+            // In demo mode, always show win (profit guaranteed)
             if (finalPnl >= 0) {
                 resultIconEl.textContent = '🎉';
                 resultIconEl.className = 'result-icon win-icon';
@@ -1069,15 +1332,51 @@ function MINIAPP_HTML(env: Env) {
                 resultTextEl.textContent = 'Better luck next time!';
             }
             
+            // Create trade record
+            const tradeRecord = {
+                id: crypto.randomUUID(),
+                timestamp: Date.now(),
+                direction: trade.direction,
+                amount: trade.amount,
+                entryPrice: trade.entryPrice,
+                exitPrice: finalPrice,
+                profit: finalPnl,
+                percentage: percentChange
+            };
+            
+            // Update user balance and display
+            const newBalance = userData.balance + finalPnl;
+            
             finalPnlEl.textContent = (finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(2);
             finalPnlEl.className = 'live-pnl ' + (finalPnl >= 0 ? 'profit' : 'loss');
             
+            if (profitPercentEl) {
+                profitPercentEl.textContent = (percentChange >= 0 ? '+' : '') + percentChange.toFixed(2) + '%';
+                profitPercentEl.className = 'live-percent ' + (percentChange >= 0 ? 'profit' : 'loss');
+            }
+            
+            if (finalBalanceEl) {
+                finalBalanceEl.textContent = '$' + newBalance.toFixed(2);
+            }
+            
             // Update user data
-            userData.balance += finalPnl;
+            userData.balance = newBalance;
             userData.stats.total++;
             userData.stats.profit += finalPnl;
+            userData.trades.push(tradeRecord);
+            
+            // Save to server if authenticated
+            saveUserData();
+            
+            // Update balance display
+            document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
             
             updateStats();
+            
+            // Auto-hide result after 5 seconds
+            setTimeout(() => {
+                resetTrade();
+            }, 5000);
         }
 
         // Reset trade
@@ -1123,6 +1422,9 @@ function MINIAPP_HTML(env: Env) {
 
         // Initialize app
         async function init() {
+            // Initialize Telegram authentication first
+            initTelegramAuth();
+            
             await initCharts();
             updateStats();
             updatePriceDisplay();
