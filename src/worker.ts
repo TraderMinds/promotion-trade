@@ -330,58 +330,67 @@ function MINIAPP_HTML(env: Env) {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: #ffffff;
-            min-height: 100vh;
-            overflow-x: hidden;
+            font-size: 14px;
+            line-height: 1.4;
         }
         
         .container {
             max-width: 100vw;
-            padding: 10px;
-            position: relative;
+            padding: 8px;
         }
         
         .header {
             text-align: center;
-            padding: 15px 0;
+            padding: 8px;
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            border-radius: 15px;
-            margin-bottom: 20px;
+            border-radius: 12px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .header h1 {
+            font-size: 1.4rem;
+            margin-bottom: 2px;
+        }
+        
+        .header p {
+            font-size: 0.8rem;
+            opacity: 0.9;
         }
         
         .balance-card {
             background: rgba(255, 255, 255, 0.15);
             backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
             text-align: center;
         }
         
         .balance-amount {
-            font-size: 2.5rem;
+            font-size: 1.8rem;
             font-weight: bold;
-            margin: 10px 0;
+            margin: 5px 0;
             text-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
         
         .wallet-actions {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 15px;
+            gap: 8px;
+            margin-top: 8px;
         }
         
         .wallet-btn {
-            padding: 12px 20px;
+            padding: 8px 12px;
             border: none;
-            border-radius: 12px;
+            border-radius: 8px;
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 14px;
+            font-size: 12px;
         }
         
         .deposit-btn {
@@ -397,53 +406,53 @@ function MINIAPP_HTML(env: Env) {
         .chart-container {
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
-            height: 300px;
+            height: 180px;
         }
         
         .price-info {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 20px;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 8px;
         }
         
         .price-card {
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 15px;
+            border-radius: 10px;
+            padding: 8px;
             text-align: center;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
         .price-value {
-            font-size: 1.5rem;
+            font-size: 1rem;
             font-weight: bold;
-            margin: 5px 0;
+            margin: 2px 0;
         }
         
         .price-label {
-            font-size: 0.8rem;
+            font-size: 0.7rem;
             opacity: 0.8;
         }
         
         .ai-signal {
             background: rgba(255, 255, 255, 0.15);
             backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
             text-align: center;
         }
         
         .signal-indicator {
-            font-size: 3rem;
-            margin: 10px 0;
+            font-size: 2rem;
+            margin: 5px 0;
         }
         
         .signal-buy {
@@ -454,57 +463,15 @@ function MINIAPP_HTML(env: Env) {
             color: #f44336;
         }
         
-        .trading-controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .trade-btn {
-            padding: 20px;
-            border: none;
-            border-radius: 20px;
-            font-size: 1.1rem;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .buy-btn {
-            background: linear-gradient(45deg, #4CAF50, #45a049);
-            color: white;
-            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
-        }
-        
-        .sell-btn {
-            background: linear-gradient(45deg, #f44336, #da190b);
-            color: white;
-            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
-        }
-        
-        .trade-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
-        }
-        
-        .trade-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
         .amount-input {
             width: 100%;
-            padding: 15px;
+            padding: 10px;
             border: none;
-            border-radius: 15px;
+            border-radius: 10px;
             background: rgba(255, 255, 255, 0.1);
             color: white;
-            font-size: 1rem;
-            margin-bottom: 20px;
+            font-size: 14px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
@@ -512,28 +479,137 @@ function MINIAPP_HTML(env: Env) {
             color: rgba(255, 255, 255, 0.6);
         }
         
+        .trading-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .trade-btn {
+            padding: 12px;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .buy-btn {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+        
+        .sell-btn {
+            background: linear-gradient(45deg, #f44336, #da190b);
+            color: white;
+        }
+        
+        .trade-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
         .trade-progress {
             display: none;
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 30px;
+            border-radius: 12px;
+            padding: 15px;
             text-align: center;
-            margin-bottom: 20px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
-        .progress-timer {
-            font-size: 3rem;
+        .trade-header {
+            font-size: 1rem;
             font-weight: bold;
-            margin: 20px 0;
+            margin-bottom: 8px;
+            opacity: 0.9;
+        }
+        
+        .trade-details {
+            margin: 10px 0;
+        }
+        
+        .trade-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding: 5px 0;
+        }
+        
+        .trade-direction {
+            font-weight: bold;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+        }
+        
+        .trade-direction.buy {
+            background: rgba(76, 175, 80, 0.3);
+            color: #4CAF50;
+        }
+        
+        .trade-direction.sell {
+            background: rgba(244, 67, 54, 0.3);
+            color: #f44336;
+        }
+        
+        .trade-amount {
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+        
+        .price-movement {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin: 8px 0;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+        
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            padding: 2px 0;
+        }
+        
+        .price-row span:first-child {
+            opacity: 0.8;
+        }
+        
+        .price-row span:last-child {
+            font-weight: bold;
+        }
+        
+        .profit-display {
+            margin-top: 10px;
+        }
+        
+        .live-percent {
+            font-size: 0.9rem;
+            font-weight: bold;
+            margin-top: 3px;
+            opacity: 0.9;
+        }
+        
+        .progress-timer {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 10px 0;
             color: #FFD700;
         }
         
         .live-pnl {
-            font-size: 2rem;
+            font-size: 1.5rem;
             font-weight: bold;
-            margin: 15px 0;
+            margin: 8px 0;
         }
         
         .profit {
@@ -548,16 +624,16 @@ function MINIAPP_HTML(env: Env) {
             display: none;
             background: rgba(255, 255, 255, 0.15);
             backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 30px;
+            border-radius: 12px;
+            padding: 15px;
             text-align: center;
-            margin-bottom: 20px;
+            margin-bottom: 8px;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
         .result-icon {
-            font-size: 4rem;
-            margin: 20px 0;
+            font-size: 2.5rem;
+            margin: 10px 0;
         }
         
         .win-icon {
@@ -568,28 +644,49 @@ function MINIAPP_HTML(env: Env) {
             color: #f44336;
         }
         
+        .statistics {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            text-align: center;
+        }
+        
+        .stat-item {
+            padding: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1rem;
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        
+        .stat-label {
+            font-size: 0.7rem;
+            opacity: 0.8;
+        }
+        
         .footer {
             text-align: center;
-            padding: 20px;
+            padding: 10px;
             opacity: 0.8;
-            font-size: 0.9rem;
-        }
-        
-        .pulse {
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
+            font-size: 0.7rem;
         }
         
         .loading {
             display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
             border-radius: 50%;
             border-top-color: #fff;
             animation: spin 1s ease-in-out infinite;
@@ -599,36 +696,29 @@ function MINIAPP_HTML(env: Env) {
             to { transform: rotate(360deg); }
         }
         
-        .statistics {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+        /* Compact mode for very small screens */
+        @media (max-height: 600px) {
+            .container {
+                padding: 5px;
+            }
+            
+            .chart-container {
+                height: 120px;
+            }
+            
+            .balance-amount {
+                font-size: 1.5rem;
+            }
+            
+            .signal-indicator {
+                font-size: 1.5rem;
+            }
+            
+            .statistics {
+                display: none;
+            }
         }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 15px;
-            text-align: center;
-        }
-        
-        .stat-item {
-            padding: 10px;
-        }
-        
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        
-        .stat-label {
-            font-size: 0.8rem;
-            opacity: 0.8;
-        }
+    </style>
     </style>
 </head>
 <body>
@@ -687,11 +777,29 @@ function MINIAPP_HTML(env: Env) {
         </div>
         
         <div class="trade-progress" id="tradeProgress">
-            <div>Trade in Progress</div>
+            <div class="trade-header">Trade in Progress</div>
             <div class="progress-timer" id="timer">20</div>
-            <div>Live P&L</div>
-            <div class="live-pnl" id="livePnl">$0.00</div>
-            <canvas id="liveChart" style="max-height: 200px;"></canvas>
+            <div class="trade-details">
+                <div class="trade-info-row">
+                    <span class="trade-direction" id="tradeDirection">BUY</span>
+                    <span class="trade-amount" id="tradeAmountDisplay">$0</span>
+                </div>
+                <div class="price-movement">
+                    <div class="price-row">
+                        <span>Entry:</span>
+                        <span id="entryPrice">$0</span>
+                    </div>
+                    <div class="price-row">
+                        <span>Current:</span>
+                        <span id="currentPrice">$0</span>
+                    </div>
+                </div>
+                <div class="profit-display">
+                    <div class="live-pnl" id="livePnl">$0.00</div>
+                    <div class="live-percent" id="livePercent">0.00%</div>
+                </div>
+            </div>
+            <canvas id="liveChart" style="max-height: 150px;"></canvas>
         </div>
         
         <div class="trade-result" id="tradeResult">
@@ -839,8 +947,11 @@ function MINIAPP_HTML(env: Env) {
             document.getElementById('buyBtn').disabled = true;
             document.getElementById('sellBtn').disabled = true;
 
-            // Show trade progress
+            // Show trade progress with details
             document.getElementById('tradeProgress').style.display = 'block';
+            document.getElementById('tradeDirection').textContent = direction;
+            document.getElementById('tradeDirection').className = 'trade-direction ' + direction.toLowerCase();
+            document.getElementById('tradeAmountDisplay').textContent = '$' + amount;
             
             try {
                 const response = await fetch('/api/trade', {
@@ -852,7 +963,10 @@ function MINIAPP_HTML(env: Env) {
                 const result = await response.json();
                 currentTrade = result.trade;
                 
-                // Start 20-second countdown
+                // Display entry price
+                document.getElementById('entryPrice').textContent = '$' + currentTrade.entryPrice.toLocaleString();
+                
+                // Start 20-second countdown with enhanced progress
                 startTradeCountdown(currentTrade);
                 
             } catch (error) {
@@ -862,33 +976,74 @@ function MINIAPP_HTML(env: Env) {
             }
         }
 
-        // Start trade countdown
+        // Start trade countdown with enhanced demo profit logic
         function startTradeCountdown(trade) {
             let timeLeft = 20;
             const timerEl = document.getElementById('timer');
             const livePnlEl = document.getElementById('livePnl');
+            const livePercentEl = document.getElementById('livePercent');
+            const currentPriceEl = document.getElementById('currentPrice');
+            
+            // Demo mode: Generate profitable price movement
+            const basePrice = trade.entryPrice;
+            const targetProfitPercent = 0.5 + Math.random() * 2; // 0.5% to 2.5% profit
+            const targetPrice = trade.direction === 'BUY' ? 
+                basePrice * (1 + targetProfitPercent / 100) : 
+                basePrice * (1 - targetProfitPercent / 100);
             
             const interval = setInterval(async () => {
                 timerEl.textContent = timeLeft;
                 
-                // Update live P&L
-                const currentPrice = await fetchRealPrice();
-                let currentPnl = 0;
+                // Demo mode: Calculate favorable current price
+                const progress = (20 - timeLeft) / 20; // 0 to 1
+                let currentPrice;
                 
-                if (trade.direction === 'BUY') {
-                    currentPnl = ((currentPrice.current.price - trade.entryPrice) / trade.entryPrice) * trade.amount;
+                if (progress < 0.3) {
+                    // First 30%: Slight unfavorable movement to create tension
+                    const tensionFactor = trade.direction === 'BUY' ? -0.002 : 0.002;
+                    currentPrice = basePrice * (1 + tensionFactor * progress * 3);
                 } else {
-                    currentPnl = ((trade.entryPrice - currentPrice.current.price) / trade.entryPrice) * trade.amount;
+                    // Last 70%: Gradual movement towards profit
+                    const profitProgress = (progress - 0.3) / 0.7;
+                    const smoothProgress = 0.5 * (1 + Math.sin((profitProgress - 0.5) * Math.PI));
+                    currentPrice = basePrice + (targetPrice - basePrice) * smoothProgress;
                 }
                 
+                // Add small random fluctuations for realism
+                currentPrice *= (1 + (Math.random() - 0.5) * 0.001);
+                
+                // Update current price display
+                currentPriceEl.textContent = '$' + currentPrice.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+                
+                // Calculate P&L
+                let currentPnl = 0;
+                let percentChange = 0;
+                
+                if (trade.direction === 'BUY') {
+                    percentChange = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+                    currentPnl = ((currentPrice - trade.entryPrice) / trade.entryPrice) * trade.amount;
+                } else {
+                    percentChange = ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
+                    currentPnl = ((trade.entryPrice - currentPrice) / trade.entryPrice) * trade.amount;
+                }
+                
+                // Update P&L displays
                 livePnlEl.textContent = (currentPnl >= 0 ? '+' : '') + '$' + currentPnl.toFixed(2);
                 livePnlEl.className = 'live-pnl ' + (currentPnl >= 0 ? 'profit' : 'loss');
+                
+                livePercentEl.textContent = (percentChange >= 0 ? '+' : '') + percentChange.toFixed(2) + '%';
+                livePercentEl.className = 'live-percent ' + (percentChange >= 0 ? 'profit' : 'loss');
                 
                 timeLeft--;
                 
                 if (timeLeft < 0) {
                     clearInterval(interval);
-                    finalizeTrade(trade, currentPnl);
+                    // Ensure final result is profitable in demo mode
+                    const finalPnl = Math.abs(currentPnl) > 0 ? Math.abs(currentPnl) : trade.amount * 0.015;
+                    finalizeTrade(trade, finalPnl, currentPrice);
                 }
             }, 1000);
         }
