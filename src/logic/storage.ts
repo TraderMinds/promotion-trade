@@ -2,6 +2,7 @@ export interface UserState {
   userId: number;
   balance: number; // USD
   trades: StoredTrade[];
+  achievements?: string[]; // Achievement IDs
   updatedAt: number;
 }
 

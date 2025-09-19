@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import { getUserState, appendTrade, saveUserState } from './logic/storage.js';
 import { runTrade, simulateTicks, mockAISignal, getRealPrice, runRealTrade } from './logic/pricing.js';
+import { calculateUserStats, checkAchievements, calculatePortfolioMetrics, ACHIEVEMENTS } from './logic/features.js';
 
 interface Env {
   TRADING_KV: KVNamespace;
@@ -197,6 +198,60 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       console.error('Trade execution error:', error);
       return json({ error: 'Trade execution failed' }, 500);
     }
+  }
+
+  if (url.pathname === '/api/stats') {
+    const state = await getUserState(env, userId);
+    const stats = calculateUserStats(state.trades);
+    const portfolio = calculatePortfolioMetrics(state.trades, 10000);
+    const achievements = checkAchievements(stats, state.achievements || []);
+    
+    return json({
+      stats,
+      portfolio,
+      availableAchievements: ACHIEVEMENTS,
+      unlockedAchievements: state.achievements || [],
+      newAchievements: achievements
+    });
+  }
+
+  if (url.pathname === '/api/achievements' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({})) as { achievementId?: string };
+    const achievementId = body.achievementId;
+    
+    if (!achievementId) return json({ error: 'Missing achievement ID' }, 400);
+    
+    const state = await getUserState(env, userId);
+    const stats = calculateUserStats(state.trades);
+    const newAchievements = checkAchievements(stats, state.achievements || []);
+    
+    const achievement = newAchievements.find(a => a.id === achievementId);
+    if (!achievement) return json({ error: 'Achievement not available' }, 400);
+    
+    // Add achievement and reward
+    state.achievements = state.achievements || [];
+    state.achievements.push(achievementId);
+    state.balance = +(state.balance + achievement.reward).toFixed(2);
+    
+    await saveUserState(env, state);
+    
+    return json({
+      achievement,
+      newBalance: state.balance,
+      message: `Congratulations! You earned $${achievement.reward}!`
+    });
+  }
+
+  if (url.pathname === '/api/leaderboard') {
+    // For demo purposes, generate sample leaderboard
+    const sampleLeaderboard = [
+      { userId: 1, username: 'CryptoKing', totalProfit: 5420.50, winRate: 0.78, totalTrades: 89, rank: 1 },
+      { userId: 2, username: 'TradeQueen', totalProfit: 4890.25, winRate: 0.72, totalTrades: 156, rank: 2 },
+      { userId: 3, username: 'AITrader', totalProfit: 4320.75, winRate: 0.69, totalTrades: 203, rank: 3 },
+      { userId: userId, username: 'You', totalProfit: calculateUserStats((await getUserState(env, userId)).trades).totalProfit, winRate: 0.65, totalTrades: (await getUserState(env, userId)).trades.length, rank: 4 }
+    ];
+    
+    return json({ leaderboard: sampleLeaderboard });
   }
 
   return json({ error: 'unknown endpoint' }, 404);
