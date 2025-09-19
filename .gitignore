@@ -69,6 +69,3 @@ Thumbs.db
 # Wrangler
 .wrangler/
 wrangler.toml.bak
-
-
-node_modules
