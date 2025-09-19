@@ -72,6 +72,30 @@ async function handleTelegram(update: TelegramUpdate, env: Env): Promise<Respons
 
 async function handleApi(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
+  
+  // Price endpoint doesn't require user authentication
+  if (url.pathname === '/api/price') {
+    try {
+      const realPrice = await getRealPrice();
+      const ticks = simulateTicks(Date.now(), realPrice.price, 5);
+      const signal = mockAISignal(ticks);
+      
+      return json({
+        current: {
+          price: realPrice.price,
+          source: realPrice.source,
+          timestamp: realPrice.timestamp
+        },
+        signal,
+        ticks: ticks.slice(-5),
+        confidence: Math.random() > 0.5 ? 'High' : 'Medium'
+      });
+    } catch (error) {
+      return json({ error: 'Price fetch failed' }, 500);
+    }
+  }
+
+  // All other endpoints require user authentication
   const userId = parseInt(url.searchParams.get('user') || '0', 10) || 0;
   if (!userId) return json({ error: 'user param required' }, 400);
 
