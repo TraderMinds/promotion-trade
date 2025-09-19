@@ -491,13 +491,68 @@ function MINIAPP_HTML(env: Env) {
             opacity: 0.8;
         }
         
+        /* EMPHASIZED AI SIGNAL SECTION */
         .ai-signal {
-            background: rgba(255, 255, 255, 0.15);
-            backdrop-filter: blur(10px);
-            border-radius: 12px;
-            padding: 12px;
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            border: 3px solid #FF6B35;
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 12px;
+            text-align: center;
+            box-shadow: 0 8px 25px rgba(255, 107, 53, 0.4);
+            animation: pulse-glow 2s infinite;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ai-signal::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shine 3s infinite;
+        }
+        
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 8px 25px rgba(255, 107, 53, 0.4); }
+            50% { box-shadow: 0 12px 35px rgba(255, 107, 53, 0.7); }
+        }
+        
+        @keyframes shine {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        
+        .ai-signal h3 {
+            color: #1a1a1a;
+            font-size: 1.1rem;
+            font-weight: 800;
             margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.5);
+        }
+        
+        .signal-content {
+            color: #2c2c2c;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .signal-direction {
+            font-size: 1.3rem;
+            font-weight: 800;
+            margin: 8px 0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .signal-confidence {
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
             text-align: center;
         }
         
@@ -530,47 +585,161 @@ function MINIAPP_HTML(env: Env) {
             color: rgba(255, 255, 255, 0.6);
         }
         
+        
+        /* EMPHASIZED BUY/SELL BUTTONS */
         .trading-controls {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 8px;
+            gap: 12px;
+            margin: 12px 0;
         }
         
         .trade-btn {
-            padding: 12px;
+            padding: 16px 20px;
             border: none;
-            border-radius: 12px;
-            font-size: 14px;
-            font-weight: bold;
+            border-radius: 16px;
+            font-size: 1.1rem;
+            font-weight: 800;
             cursor: pointer;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+            border: 2px solid transparent;
         }
         
         .buy-btn {
-            background: linear-gradient(45deg, #4CAF50, #45a049);
+            background: linear-gradient(135deg, #4CAF50, #45a049, #2E7D32);
             color: white;
+            border-color: #4CAF50;
+            animation: buy-pulse 2s infinite;
         }
         
         .sell-btn {
-            background: linear-gradient(45deg, #f44336, #da190b);
+            background: linear-gradient(135deg, #f44336, #da190b, #C62828);
             color: white;
+            border-color: #f44336;
+            animation: sell-pulse 2s infinite;
+        }
+        
+        .trade-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: button-shine 3s infinite;
+        }
+        
+        .trade-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+        }
+        
+        .trade-btn:active {
+            transform: translateY(0);
+        }
+        
+        @keyframes buy-pulse {
+            0%, 100% { box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4); }
+            50% { box-shadow: 0 10px 30px rgba(76, 175, 80, 0.7); }
+        }
+        
+        @keyframes sell-pulse {
+            0%, 100% { box-shadow: 0 6px 20px rgba(244, 67, 54, 0.4); }
+            50% { box-shadow: 0 10px 30px rgba(244, 67, 54, 0.7); }
+        }
+        
+        @keyframes button-shine {
+            0% { left: -100%; }
+            100% { left: 100%; }
         }
         
         .trade-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+            animation: none;
         }
         
+        /* EMPHASIZED TRADE PROGRESS MODAL */
         .trade-progress {
             display: none;
-            background: rgba(255, 255, 255, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
             backdrop-filter: blur(10px);
-            border-radius: 12px;
-            padding: 15px;
+        }
+        
+        .progress-modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            padding: 30px;
+            width: 90%;
+            max-width: 350px;
             text-align: center;
-            margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            border: 3px solid #FFD700;
+            box-shadow: 0 20px 60px rgba(255, 215, 0, 0.4);
+            animation: modal-appear 0.5s ease;
+        }
+        
+        @keyframes modal-appear {
+            0% { 
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.8);
+            }
+            100% { 
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+        
+        .progress-title {
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-bottom: 20px;
+            color: #FFD700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        .progress-timer {
+            font-size: 3rem;
+            font-weight: 900;
+            margin: 20px 0;
+            color: #FFD700;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.7);
+            animation: timer-pulse 1s infinite;
+        }
+        
+        @keyframes timer-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .live-pnl {
+            font-size: 2rem;
+            font-weight: 800;
+            margin: 15px 0;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        .profit {
+            color: #4CAF50;
+        }
+        
+        .loss {
+            color: #ff4444;
         }
         
         .trade-header {
@@ -801,19 +970,19 @@ function MINIAPP_HTML(env: Env) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 TradeX Pro</h1>
-            <p>AI-Powered Trading Bot</p>
+            <h1>🚀 <span id="appTitle">TradeX Pro</span></h1>
+            <p><span id="appSubtitle">AI-Powered Trading Bot</span></p>
         </div>
         
         <div class="balance-card">
-            <div class="price-label">Your Balance</div>
+            <div class="price-label" id="balanceLabel">Your Balance</div>
             <div class="balance-amount" id="balance">$10,000.00</div>
             <div class="wallet-actions">
-                <button class="wallet-btn deposit-btn" onclick="showDeposit()">
-                    💰 Deposit
+                <button class="wallet-btn deposit-btn" onclick="showDeposit()" id="depositBtn">
+                    💰 <span id="depositText">Deposit</span>
                 </button>
-                <button class="wallet-btn withdraw-btn" onclick="showWithdraw()">
-                    💸 Withdraw
+                <button class="wallet-btn withdraw-btn" onclick="showWithdraw()" id="withdrawBtn">
+                    💸 <span id="withdrawText">Withdraw</span>
                 </button>
             </div>
         </div>
@@ -824,59 +993,73 @@ function MINIAPP_HTML(env: Env) {
         
         <div class="price-info">
             <div class="price-card">
-                <div class="price-label">Current Price</div>
+                <div class="price-label" id="currentPriceLabel">Current Price</div>
                 <div class="price-value" id="currentPrice">Loading...</div>
                 <div class="price-label" id="priceSource">Real-time</div>
             </div>
             <div class="price-card">
-                <div class="price-label">24h Change</div>
+                <div class="price-label" id="changeLabel">24h Change</div>
                 <div class="price-value" id="priceChange">+2.45%</div>
                 <div class="price-label">BTC/USD</div>
             </div>
+            <div class="price-card">
+                <div class="price-label" id="volumeLabel">Volume</div>
+                <div class="price-value" id="volume24h">$2.1B</div>
+                <div class="price-label">24h</div>
+            </div>
         </div>
         
+        <!-- EMPHASIZED AI SIGNAL SECTION -->
         <div class="ai-signal">
-            <div class="price-label">AI Recommendation</div>
-            <div class="signal-indicator" id="aiSignal">🤖</div>
-            <div id="signalText">Analyzing market...</div>
-            <div class="price-label" id="signalConfidence">Confidence: --</div>
+            <h3 id="aiTitle">🤖 AI Recommendation</h3>
+            <div class="signal-content">
+                <div class="signal-direction" id="signalDirection">ANALYZING...</div>
+                <div id="signalText">Market analysis in progress</div>
+                <div class="signal-confidence" id="signalConfidence">Confidence: --</div>
+            </div>
         </div>
         
-        <input type="number" class="amount-input" id="tradeAmount" placeholder="Enter amount ($100 - $1000)" min="100" max="1000" value="100">
+        <input type="number" class="amount-input" id="tradeAmount" 
+               placeholder="Enter amount ($100 - $1000)" 
+               min="100" max="1000" value="100">
         
+        <!-- EMPHASIZED BUY/SELL BUTTONS -->
         <div class="trading-controls">
             <button class="trade-btn buy-btn" onclick="executeTrade('BUY')" id="buyBtn">
-                📈 BUY
+                📈 <span id="buyText">BUY</span>
             </button>
             <button class="trade-btn sell-btn" onclick="executeTrade('SELL')" id="sellBtn">
-                📉 SELL
+                📉 <span id="sellText">SELL</span>
             </button>
         </div>
         
+        <!-- EMPHASIZED TRADE PROGRESS MODAL -->
         <div class="trade-progress" id="tradeProgress">
-            <div class="trade-header">Trade in Progress</div>
-            <div class="progress-timer" id="timer">20</div>
-            <div class="trade-details">
-                <div class="trade-info-row">
-                    <span class="trade-direction" id="tradeDirection">BUY</span>
-                    <span class="trade-amount" id="tradeAmountDisplay">$0</span>
-                </div>
-                <div class="price-movement">
-                    <div class="price-row">
-                        <span>Entry:</span>
-                        <span id="entryPrice">$0</span>
+            <div class="progress-modal">
+                <div class="progress-title" id="progressTitle">Trade in Progress</div>
+                <div class="progress-timer" id="timer">20</div>
+                <div class="trade-details">
+                    <div class="trade-info-row">
+                        <span class="trade-direction" id="tradeDirection">BUY</span>
+                        <span class="trade-amount" id="tradeAmountDisplay">$0</span>
                     </div>
-                    <div class="price-row">
-                        <span>Current:</span>
-                        <span id="currentPrice">$0</span>
+                    <div class="price-movement">
+                        <div class="price-row">
+                            <span id="entryLabel">Entry:</span>
+                            <span id="entryPrice">$0</span>
+                        </div>
+                        <div class="price-row">
+                            <span id="currentLabel">Current:</span>
+                            <span id="currentPriceModal">$0</span>
+                        </div>
+                    </div>
+                    <div class="profit-display">
+                        <div class="live-pnl" id="livePnl">$0.00</div>
+                        <div class="live-percent" id="livePercent">0.00%</div>
                     </div>
                 </div>
-                <div class="profit-display">
-                    <div class="live-pnl" id="livePnl">$0.00</div>
-                    <div class="live-percent" id="livePercent">0.00%</div>
-                </div>
+                <canvas id="liveChart" style="max-height: 120px; margin-top: 15px;"></canvas>
             </div>
-            <canvas id="liveChart" style="max-height: 150px;"></canvas>
         </div>
         
         <div class="trade-result" id="tradeResult">
@@ -926,10 +1109,178 @@ function MINIAPP_HTML(env: Env) {
     </div>
 
     <script>
+        // Multilingual Support System
+        const LANGUAGES = {
+            en: {
+                name: 'English',
+                flag: '🇺🇸',
+                app_title: 'TradeX Pro',
+                app_subtitle: 'AI-Powered Trading Bot',
+                balance_label: 'Your Balance',
+                deposit: 'Deposit',
+                withdraw: 'Withdraw',
+                current_price: 'Current Price',
+                change_24h: '24h Change',
+                volume: 'Volume',
+                ai_title: '🤖 AI Recommendation',
+                buy: 'BUY',
+                sell: 'SELL',
+                trade_progress: 'Trade in Progress',
+                entry: 'Entry:',
+                current: 'Current:',
+                analyzing: 'ANALYZING...',
+                market_analysis: 'Market analysis in progress',
+                confidence: 'Confidence:',
+                amount_placeholder: 'Enter amount ($100 - $1000)',
+                transaction_history: 'Transaction History',
+                no_transactions: 'No transactions yet. Start trading!'
+            },
+            es: {
+                name: 'Español',
+                flag: '🇪🇸',
+                app_title: 'TradeX Pro',
+                app_subtitle: 'Bot de Trading con IA',
+                balance_label: 'Tu Saldo',
+                deposit: 'Depositar',
+                withdraw: 'Retirar',
+                current_price: 'Precio Actual',
+                change_24h: 'Cambio 24h',
+                volume: 'Volumen',
+                ai_title: '🤖 Recomendación IA',
+                buy: 'COMPRAR',
+                sell: 'VENDER',
+                trade_progress: 'Operación en Progreso',
+                entry: 'Entrada:',
+                current: 'Actual:',
+                analyzing: 'ANALIZANDO...',
+                market_analysis: 'Análisis de mercado en progreso',
+                confidence: 'Confianza:',
+                amount_placeholder: 'Ingresa cantidad ($100 - $1000)',
+                transaction_history: 'Historial de Transacciones',
+                no_transactions: '¡Sin transacciones aún. Comienza a operar!'
+            },
+            fa: {
+                name: 'فارسی',
+                flag: '🇮🇷',
+                app_title: 'TradeX Pro',
+                app_subtitle: 'ربات معاملاتی هوش مصنوعی',
+                balance_label: 'موجودی شما',
+                deposit: 'واریز',
+                withdraw: 'برداشت',
+                current_price: 'قیمت فعلی',
+                change_24h: 'تغییر ۲۴ ساعته',
+                volume: 'حجم',
+                ai_title: '🤖 پیشنهاد هوش مصنوعی',
+                buy: 'خرید',
+                sell: 'فروش',
+                trade_progress: 'معامله در حال انجام',
+                entry: 'ورودی:',
+                current: 'فعلی:',
+                analyzing: 'در حال تحلیل...',
+                market_analysis: 'تحلیل بازار در حال انجام',
+                confidence: 'اطمینان:',
+                amount_placeholder: 'مقدار را وارد کنید ($100 - $1000)',
+                transaction_history: 'تاریخچه تراکنش‌ها',
+                no_transactions: 'هنوز تراکنشی ندارید. شروع به معامله کنید!'
+            },
+            fr: {
+                name: 'Français',
+                flag: '🇫🇷',
+                app_title: 'TradeX Pro',
+                app_subtitle: 'Bot de Trading IA',
+                balance_label: 'Votre Solde',
+                deposit: 'Dépôt',
+                withdraw: 'Retrait',
+                current_price: 'Prix Actuel',
+                change_24h: 'Change 24h',
+                volume: 'Volume',
+                ai_title: '🤖 Recommandation IA',
+                buy: 'ACHETER',
+                sell: 'VENDRE',
+                trade_progress: 'Trade en Cours',
+                entry: 'Entrée:',
+                current: 'Actuel:',
+                analyzing: 'ANALYSE...',
+                market_analysis: 'Analyse du marché en cours',
+                confidence: 'Confiance:',
+                amount_placeholder: 'Entrez le montant ($100 - $1000)',
+                transaction_history: 'Historique des Transactions',
+                no_transactions: 'Aucune transaction encore. Commencez à trader!'
+            },
+            de: {
+                name: 'Deutsch',
+                flag: '🇩🇪',
+                app_title: 'TradeX Pro',
+                app_subtitle: 'KI-Trading Bot',
+                balance_label: 'Ihr Guthaben',
+                deposit: 'Einzahlung',
+                withdraw: 'Auszahlung',
+                current_price: 'Aktueller Preis',
+                change_24h: '24h Änderung',
+                volume: 'Volumen',
+                ai_title: '🤖 KI-Empfehlung',
+                buy: 'KAUFEN',
+                sell: 'VERKAUFEN',
+                trade_progress: 'Handel läuft',
+                entry: 'Einstieg:',
+                current: 'Aktuell:',
+                analyzing: 'ANALYSIERE...',
+                market_analysis: 'Marktanalyse läuft',
+                confidence: 'Vertrauen:',
+                amount_placeholder: 'Betrag eingeben ($100 - $1000)',
+                transaction_history: 'Transaktionshistorie',
+                no_transactions: 'Noch keine Transaktionen. Beginnen Sie zu handeln!'
+            }
+        };
+
+        // Get URL parameters for language and user
+        const urlParams = new URLSearchParams(window.location.search);
+        const userLang = urlParams.get('lang') || 'en';
+        const urlUserId = urlParams.get('user_id');
+
+        // Apply language to UI
+        function applyLanguage(lang) {
+            const texts = LANGUAGES[lang] || LANGUAGES.en;
+            
+            // Update text elements
+            document.getElementById('appTitle').textContent = texts.app_title;
+            document.getElementById('appSubtitle').textContent = texts.app_subtitle;
+            document.getElementById('balanceLabel').textContent = texts.balance_label;
+            document.getElementById('depositText').textContent = texts.deposit;
+            document.getElementById('withdrawText').textContent = texts.withdraw;
+            document.getElementById('currentPriceLabel').textContent = texts.current_price;
+            document.getElementById('changeLabel').textContent = texts.change_24h;
+            document.getElementById('volumeLabel').textContent = texts.volume;
+            document.getElementById('aiTitle').innerHTML = texts.ai_title;
+            document.getElementById('buyText').textContent = texts.buy;
+            document.getElementById('sellText').textContent = texts.sell;
+            document.getElementById('progressTitle').textContent = texts.trade_progress;
+            document.getElementById('entryLabel').textContent = texts.entry;
+            document.getElementById('currentLabel').textContent = texts.current;
+            document.getElementById('signalDirection').textContent = texts.analyzing;
+            document.getElementById('signalText').textContent = texts.market_analysis;
+            document.getElementById('tradeAmount').placeholder = texts.amount_placeholder;
+            
+            // Update signal confidence text
+            const confidenceEl = document.getElementById('signalConfidence');
+            if (confidenceEl.textContent.includes('--')) {
+                confidenceEl.textContent = texts.confidence + ' --';
+            }
+            
+            // Set text direction for RTL languages
+            if (lang === 'fa' || lang === 'ar') {
+                document.body.style.direction = 'rtl';
+                document.body.style.textAlign = 'right';
+            } else {
+                document.body.style.direction = 'ltr';
+                document.body.style.textAlign = 'left';
+            }
+        }
+
         // Initialize Telegram WebApp
         const tg = window.Telegram?.WebApp;
         let telegramUser = null;
-        let userId = 12345; // Default for demo
+        let userId = urlUserId || 12345; // Use URL param or default
         let currentTrade = null;
         let priceChart = null;
         let liveChart = null;
@@ -1436,7 +1787,10 @@ function MINIAPP_HTML(env: Env) {
 
         // Initialize app
         async function init() {
-            // Initialize Telegram authentication first
+            // Apply language first
+            applyLanguage(userLang);
+            
+            // Initialize Telegram authentication
             initTelegramAuth();
             
             await initCharts();
@@ -1445,6 +1799,70 @@ function MINIAPP_HTML(env: Env) {
             
             // Update price every 5 seconds
             setInterval(updatePriceDisplay, 5000);
+            
+            // Add enhanced trade progress modal functionality
+            enhanceTradeProgress();
+        }
+        
+        // Enhanced trade progress with emphasized modal
+        function enhanceTradeProgress() {
+            const progressEl = document.getElementById('tradeProgress');
+            
+            // Add click outside to close (but don't actually close during active trade)
+            progressEl.addEventListener('click', (e) => {
+                if (e.target === progressEl && !currentTrade) {
+                    progressEl.style.display = 'none';
+                }
+            });
+        }
+        
+        // Enhanced execute trade with modal
+        async function executeTrade(direction) {
+            const amount = parseFloat(document.getElementById('tradeAmount').value);
+            
+            if (!amount || amount < 100 || amount > 1000) {
+                alert(LANGUAGES[userLang].amount_placeholder);
+                return;
+            }
+            
+            if (amount > userData.balance) {
+                alert('Insufficient balance!');
+                return;
+            }
+            
+            // Show emphasized modal
+            const progressEl = document.getElementById('tradeProgress');
+            progressEl.style.display = 'block';
+            
+            // Disable buttons
+            document.getElementById('buyBtn').disabled = true;
+            document.getElementById('sellBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/api/trade', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        amount: amount,
+                        direction: direction,
+                        userId: userId
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Trade failed');
+                }
+                
+                const trade = await response.json();
+                simulateTrade(trade);
+                
+            } catch (error) {
+                console.error('Trade error:', error);
+                alert('Trade failed. Please try again.');
+                resetTrade();
+            }
         }
 
         // Start the app
