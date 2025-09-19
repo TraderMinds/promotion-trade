@@ -1203,14 +1203,16 @@ function MINIAPP_HTML(env: Env) {
             document.getElementById('tradeAmountDisplay').textContent = '$' + amount;
             
             try {
-                const response = await fetch('/api/trade', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount, direction, userId })
-                });
+                // Create demo trade locally (no server call needed for demo)
+                const entryPrice = await getCurrentPrice();
                 
-                const result = await response.json();
-                currentTrade = result.trade;
+                currentTrade = {
+                    id: crypto.randomUUID(),
+                    direction: direction,
+                    amount: amount,
+                    entryPrice: entryPrice,
+                    timestamp: Date.now()
+                };
                 
                 // Display entry price
                 document.getElementById('entryPrice').textContent = '$' + currentTrade.entryPrice.toLocaleString();
@@ -1225,6 +1227,18 @@ function MINIAPP_HTML(env: Env) {
                 console.error('Trade error:', error);
                 alert('Trade failed. Please try again.');
                 resetTrade();
+            }
+        }
+        
+        // Get current price for demo trading
+        async function getCurrentPrice() {
+            try {
+                const response = await fetch('/api/price');
+                const data = await response.json();
+                return data.current.price;
+            } catch (error) {
+                // Fallback price if API fails
+                return 65000 + Math.random() * 10000; // Random price between 65k-75k
             }
         }
 
