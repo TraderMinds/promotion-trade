@@ -1,0 +1,12 @@
+name = "promotion-trade-bot"
+main = "src/worker.ts"
+compatibility_date = "2025-09-19"
+
+[[kv_namespaces]]
+binding = "TRADING_KV"
+id = "e3a447233870468b8578949670da47fe"
+
+[vars]
+# Placeholder; set real token via dashboard secret: TELEGRAM_BOT_TOKEN
+BASE_URL = "https://promotion-trade-bot.tradermindai.workers.dev"
+MINIAPP_URL = "https://promotion-trade-bot.tradermindai.workers.dev/miniapp"

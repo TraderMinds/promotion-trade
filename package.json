@@ -1,0 +1,17 @@
+{
+  "name": "promotion-trade-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev src/worker.ts --local --var TELEGRAM_BOT_TOKEN:dummy",
+    "build": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5",
+    "wrangler": "3.80.0",
+    "@cloudflare/workers-types": "^4.20240919.0"
+  },
+  "dependencies": {}
+}
