@@ -1203,9 +1203,46 @@ function MINIAPP_HTML(env: Env) {
     </style>
 </head>
 <body>
+    <!-- COMPREHENSIVE DEBUG CONSOLE -->
+    <div id="debug-console" style="position: fixed; top: 0; left: 0; width: 100%; height: 200px; background: black; color: lime; font-family: monospace; font-size: 10px; overflow-y: scroll; z-index: 99999; border-bottom: 2px solid red; padding: 5px;">
+        <div style="color: yellow; font-weight: bold;">🔧 TRADEX DEBUG CONSOLE</div>
+        <div id="debug-log"></div>
+    </div>
+
     <!-- Debug Panel - Hidden Now That It Works -->
     <div id="debug-panel" style="display: none;">
     </div>
+
+    <!-- DEBUG LOGGING SCRIPT - RUNS FIRST -->
+    <script>
+        // Enhanced logging function
+        function debugLog(message) {
+            var timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            var logMessage = timestamp + ' - ' + message;
+            console.log(logMessage);
+            
+            var debugLogEl = document.getElementById('debug-log');
+            if (debugLogEl) {
+                debugLogEl.innerHTML += '<div>' + logMessage + '</div>';
+                debugLogEl.scrollTop = debugLogEl.scrollHeight;
+            }
+        }
+        
+        debugLog('🚀 DEBUG SYSTEM INITIALIZED');
+        debugLog('📱 User Agent: ' + navigator.userAgent);
+        debugLog('🌐 Location: ' + window.location.href);
+        debugLog('🔧 Fetch available: ' + (typeof fetch !== 'undefined'));
+        debugLog('📱 Telegram available: ' + (typeof window.Telegram !== 'undefined'));
+        
+        // Override console.log to also show in debug console
+        var originalLog = console.log;
+        console.log = function() {
+            originalLog.apply(console, arguments);
+            debugLog(Array.prototype.slice.call(arguments).join(' '));
+        };
+        
+        debugLog('✅ Enhanced logging system ready');
+    </script>
 
     <!-- Immediate JavaScript Test -->
     <script>
@@ -1352,6 +1389,16 @@ function MINIAPP_HTML(env: Env) {
             <h1>🚀 TradeX Pro</h1>
             <p>AI-Powered Trading Bot</p>
             <div style="font-size: 0.8rem; color: #ccc;" id="userType">Loading...</div>
+            
+            <!-- VISUAL PROGRESS INDICATOR -->
+            <div id="progress-indicator" style="background: rgba(255,255,255,0.1); padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 12px;">
+                <div style="color: yellow; font-weight: bold;">🔄 LOADING PROGRESS:</div>
+                <div id="step1" style="color: #666;">1. ⏳ DOM Loading...</div>
+                <div id="step2" style="color: #666;">2. ⏳ Scripts Initializing...</div>
+                <div id="step3" style="color: #666;">3. ⏳ User Info Loading...</div>
+                <div id="step4" style="color: #666;">4. ⏳ Prices Loading...</div>
+                <div id="step5" style="color: #666;">5. ⏳ UI Activation...</div>
+            </div>
         </div>
         
         <div class="nav-tabs">
@@ -2074,6 +2121,177 @@ function MINIAPP_HTML(env: Env) {
                 loadPrices();
             }
         }, 2000);
+    </script>
+    
+    <!-- FINAL WORKING SCRIPT - RUNS LAST -->
+    <script>
+        console.log('🚀 FINAL SCRIPT EXECUTING...');
+        
+        function updateStep(stepNum, status, message) {
+            var stepEl = document.getElementById('step' + stepNum);
+            if (stepEl) {
+                var icon = status === 'success' ? '✅' : status === 'error' ? '❌' : '🔄';
+                var color = status === 'success' ? '#4CAF50' : status === 'error' ? '#f44336' : '#FFA500';
+                stepEl.innerHTML = stepNum + '. ' + icon + ' ' + message;
+                stepEl.style.color = color;
+            }
+            console.log('STEP ' + stepNum + ' [' + status.toUpperCase() + ']: ' + message);
+        }
+        
+        // STEP 1: DOM Check
+        console.log('📋 STEP 1: Checking DOM elements...');
+        updateStep(1, 'progress', 'Checking DOM elements...');
+        
+        var userEl = document.getElementById('userType');
+        var cryptoList = document.getElementById('crypto-list');
+        var debugLog = document.getElementById('debug-log');
+        
+        console.log('👤 userEl found:', !!userEl);
+        console.log('💰 cryptoList found:', !!cryptoList);
+        console.log('🔧 debugLog found:', !!debugLog);
+        
+        if (userEl && cryptoList) {
+            updateStep(1, 'success', 'DOM elements found');
+        } else {
+            updateStep(1, 'error', 'Missing DOM elements');
+            console.error('❌ Missing critical DOM elements');
+            return;
+        }
+        
+        // STEP 2: Scripts Initialization
+        console.log('🔧 STEP 2: Initializing scripts...');
+        updateStep(2, 'progress', 'Initializing scripts...');
+        
+        try {
+            // Test fetch availability
+            if (typeof fetch === 'undefined') {
+                throw new Error('Fetch API not available');
+            }
+            
+            // Test basic JavaScript functions
+            var testArray = [1, 2, 3];
+            var testResult = testArray.map(function(x) { return x * 2; });
+            console.log('🧪 JavaScript test:', testResult);
+            
+            updateStep(2, 'success', 'Scripts initialized');
+        } catch (e) {
+            updateStep(2, 'error', 'Script initialization failed: ' + e.message);
+            console.error('❌ Script initialization error:', e);
+            return;
+        }
+        
+        // STEP 3: Fix User Info
+        console.log('👤 STEP 3: Fixing user info...');
+        updateStep(3, 'progress', 'Updating user info...');
+        
+        try {
+            userEl.textContent = '👤 Demo Mode';
+            userEl.style.color = '#888';
+            updateStep(3, 'success', 'User info updated');
+            console.log('✅ User info fixed');
+        } catch (e) {
+            updateStep(3, 'error', 'User info update failed: ' + e.message);
+            console.error('❌ User info error:', e);
+        }
+        
+        // STEP 4: Load Prices
+        console.log('💰 STEP 4: Loading cryptocurrency prices...');
+        updateStep(4, 'progress', 'Fetching prices from API...');
+        
+        var apiUrl = '${baseUrl}/api/prices';
+        console.log('🌐 API URL:', apiUrl);
+        
+        // Add detailed network debugging
+        fetch(apiUrl)
+            .then(function(response) {
+                console.log('📡 NETWORK RESPONSE:');
+                console.log('  Status:', response.status);
+                console.log('  StatusText:', response.statusText);
+                console.log('  Headers:', response.headers);
+                console.log('  OK:', response.ok);
+                console.log('  Type:', response.type);
+                console.log('  URL:', response.url);
+                
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+                
+                updateStep(4, 'progress', 'Response received (' + response.status + '), parsing JSON...');
+                return response.json();
+            })
+            .then(function(data) {
+                console.log('📊 API DATA RECEIVED:');
+                console.log('  Type:', typeof data);
+                console.log('  Length:', data.length);
+                console.log('  Data:', data);
+                
+                updateStep(4, 'progress', 'Data parsed, displaying ' + data.length + ' items...');
+                
+                // Generate HTML with detailed logging
+                var html = '';
+                for (var i = 0; i < data.length; i++) {
+                    var crypto = data[i];
+                    console.log('🪙 Processing crypto ' + (i+1) + ':', crypto.symbol, crypto.name, crypto.price, crypto.change);
+                    
+                    var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
+                    var changeSymbol = crypto.change >= 0 ? '+' : '';
+                    html += '<div class="crypto-item" onclick="alert(\'Selected ' + crypto.symbol + '!\')">';
+                    html += '<div class="crypto-info">';
+                    html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
+                    html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
+                    html += '</div>';
+                    html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
+                    html += '</div>';
+                }
+                
+                console.log('🎨 Generated HTML length:', html.length);
+                console.log('🎨 HTML preview:', html.substring(0, 200) + '...');
+                
+                cryptoList.innerHTML = html;
+                updateStep(4, 'success', 'Prices displayed successfully (' + data.length + ' items)');
+                console.log('✅ Prices displayed successfully');
+                
+                // STEP 5: Activate UI
+                console.log('🎮 STEP 5: Activating UI interactions...');
+                updateStep(5, 'progress', 'Setting up UI interactions...');
+                
+                // Add tab functionality with detailed logging
+                window.showTab = function(tabName) {
+                    console.log('🔄 Tab clicked:', tabName);
+                    var tabs = ['trade', 'portfolio', 'wallet', 'history'];
+                    for (var i = 0; i < tabs.length; i++) {
+                        var tabEl = document.getElementById(tabs[i] + '-tab');
+                        if (tabEl) {
+                            tabEl.style.display = tabs[i] === tabName ? 'block' : 'none';
+                            console.log('📑 Tab ' + tabs[i] + ':', tabs[i] === tabName ? 'shown' : 'hidden');
+                        }
+                    }
+                };
+                
+                updateStep(5, 'success', 'All systems operational!');
+                console.log('🎉 INITIALIZATION COMPLETE - ALL SYSTEMS OPERATIONAL!');
+                
+                // Hide progress indicator after success
+                setTimeout(function() {
+                    var progressEl = document.getElementById('progress-indicator');
+                    if (progressEl) {
+                        progressEl.style.display = 'none';
+                    }
+                }, 3000);
+                
+            })
+            .catch(function(error) {
+                console.error('❌ FETCH ERROR:');
+                console.error('  Message:', error.message);
+                console.error('  Stack:', error.stack);
+                console.error('  Name:', error.name);
+                
+                updateStep(4, 'error', 'API Error: ' + error.message);
+                
+                // Show fallback content
+                cryptoList.innerHTML = '<div style="text-align: center; padding: 20px; color: #f44336;">❌ Failed to load prices: ' + error.message + '</div>';
+            });
+            
     </script>
 </body>
 </html>`;
