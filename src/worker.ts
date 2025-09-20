@@ -374,6 +374,147 @@ async function handleUserDataAPI(url: URL, env: Env): Promise<Response> {
   }
 }
 
+async function handleUserByIdAPI(userId: string, env: Env): Promise<Response> {
+  try {
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Missing userId parameter' }), { 
+        status: 400,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+
+    const userData = await getUserData(parseInt(userId), env);
+    
+    if (!userData || !userData.registered) {
+      return new Response(JSON.stringify({ error: 'User not found' }), { 
+        status: 404,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+
+    // Return user data without sensitive information
+    return new Response(JSON.stringify({
+      id: userData.id,
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      username: userData.username,
+      balance: userData.balance || 10,
+      registered: userData.registered,
+      createdAt: userData.createdAt
+    }), {
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    });
+  } catch (error) {
+    console.error('User by ID API error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), { 
+      status: 500,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    });
+  }
+}
+
+async function handleUserRegistrationAPI(request: Request, env: Env): Promise<Response> {
+  try {
+    const userData = await request.json() as any;
+    const { id, firstName, lastName, username, languageCode } = userData;
+
+    if (!id || !firstName) {
+      return new Response(JSON.stringify({ error: 'Missing required fields: id, firstName' }), { 
+        status: 400,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await getUserData(parseInt(id), env);
+    if (existingUser && existingUser.registered) {
+      return new Response(JSON.stringify({ error: 'User already registered' }), { 
+        status: 409,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+
+    // Create new user data
+    const newUserData = {
+      id: parseInt(id),
+      firstName: firstName,
+      lastName: lastName || '',
+      username: username || null,
+      languageCode: languageCode || 'en',
+      balance: 10.00, // Welcome bonus
+      registered: true,
+      createdAt: new Date().toISOString(),
+      positions: [],
+      tradeHistory: [],
+      transactions: [],
+      totalTrades: 0,
+      winRate: 0
+    };
+
+    // Save user data
+    await saveUserData(parseInt(id), newUserData, env);
+
+    // Return created user data
+    return new Response(JSON.stringify({
+      id: newUserData.id,
+      firstName: newUserData.firstName,
+      lastName: newUserData.lastName,
+      username: newUserData.username,
+      balance: newUserData.balance,
+      registered: newUserData.registered,
+      createdAt: newUserData.createdAt
+    }), {
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    });
+  } catch (error) {
+    console.error('User registration API error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), { 
+      status: 500,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    });
+  }
+}
+
 async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
   try {
     const body = await request.json() as any;
@@ -580,6 +721,17 @@ export default {
     // Handle user data API
     if (url.pathname === '/api/user' && request.method === 'GET') {
       return handleUserDataAPI(url, env);
+    }
+    
+    // Handle user data by ID
+    if (url.pathname.startsWith('/api/user/') && request.method === 'GET') {
+      const userId = url.pathname.split('/')[3];
+      return handleUserByIdAPI(userId, env);
+    }
+    
+    // Handle user registration
+    if (url.pathname === '/api/user/register' && request.method === 'POST') {
+      return handleUserRegistrationAPI(request, env);
     }
     
     // Handle trade execution API
@@ -1203,185 +1355,216 @@ function MINIAPP_HTML(env: Env) {
     </style>
 </head>
 <body>
-    <!-- COMPREHENSIVE DEBUG CONSOLE -->
-    <div id="debug-console" style="position: fixed; top: 0; left: 0; width: 100%; height: 200px; background: black; color: lime; font-family: monospace; font-size: 10px; overflow-y: scroll; z-index: 99999; border-bottom: 2px solid red; padding: 5px;">
-        <div style="color: yellow; font-weight: bold;">🔧 TRADEX DEBUG CONSOLE</div>
-        <div id="debug-log"></div>
-    </div>
-
-    <!-- Debug Panel - Hidden Now That It Works -->
-    <div id="debug-panel" style="display: none;">
-    </div>
-
-    <!-- DEBUG LOGGING SCRIPT - RUNS FIRST -->
+    <!-- SIMPLE WORKING SCRIPT -->
     <script>
-        // Enhanced logging function
-        function debugLog(message) {
-            var timestamp = new Date().toISOString().split('T')[1].split('.')[0];
-            var logMessage = timestamp + ' - ' + message;
-            console.log(logMessage);
-            
-            var debugLogEl = document.getElementById('debug-log');
-            if (debugLogEl) {
-                debugLogEl.innerHTML += '<div>' + logMessage + '</div>';
-                debugLogEl.scrollTop = debugLogEl.scrollHeight;
-            }
-        }
+        console.log('✅ SIMPLE SCRIPT RUNNING');
         
-        debugLog('🚀 DEBUG SYSTEM INITIALIZED');
-        debugLog('📱 User Agent: ' + navigator.userAgent);
-        debugLog('🌐 Location: ' + window.location.href);
-        debugLog('🔧 Fetch available: ' + (typeof fetch !== 'undefined'));
-        debugLog('📱 Telegram available: ' + (typeof window.Telegram !== 'undefined'));
-        
-        // Override console.log to also show in debug console
-        var originalLog = console.log;
-        console.log = function() {
-            originalLog.apply(console, arguments);
-            debugLog(Array.prototype.slice.call(arguments).join(' '));
-        };
-        
-        debugLog('✅ Enhanced logging system ready');
-    </script>
-
-    <!-- Immediate JavaScript Test -->
-    <script>
-        console.log('🚀 IMMEDIATE SCRIPT TEST - JavaScript is working!');
-        // Test debug panel update immediately
-        try {
-            var testEl = document.getElementById('debug-status');
-            if (testEl) {
-                testEl.textContent = 'JS WORKING!';
-                console.log('✅ Successfully updated debug status');
-            } else {
-                console.log('❌ Could not find debug-status element');
-            }
-            
-            // Fix user info display
-            var userTypeEl = document.getElementById('userType');
-            if (userTypeEl) {
-                userTypeEl.textContent = '👤 Demo Mode';
-                userTypeEl.style.color = '#888';
-                console.log('✅ Fixed user info display');
-            }
-            
-            // Add tab functionality
-            window.showTab = function(tabName) {
-                console.log('🔄 Switching to tab:', tabName);
+        // Extract real user data from Telegram WebApp
+        function getUserFromTelegram() {
+            try {
+                // Get URL parameters
+                var urlParams = new URLSearchParams(window.location.search);
+                var userId = urlParams.get('user_id');
+                var fromBot = urlParams.get('from_bot') === '1';
                 
-                // Hide all tabs
-                var tabs = ['trade', 'portfolio', 'wallet', 'history'];
-                for (var i = 0; i < tabs.length; i++) {
-                    var tabContent = document.getElementById(tabs[i] + '-tab');
-                    var tabButton = document.querySelector('.nav-tab[onclick*="' + tabs[i] + '"]');
-                    
-                    if (tabContent) {
-                        if (tabs[i] === tabName) {
-                            tabContent.style.display = 'block';
-                            tabContent.classList.add('active');
-                        } else {
-                            tabContent.style.display = 'none';
-                            tabContent.classList.remove('active');
-                        }
+                // Try to get user data from Telegram WebApp
+                var telegramUser = null;
+                if (typeof window.Telegram !== 'undefined' && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
+                    telegramUser = window.Telegram.WebApp.initDataUnsafe.user;
+                }
+                
+                console.log('🔍 User detection:', {
+                    userId: userId,
+                    fromBot: fromBot,
+                    telegramUser: telegramUser
+                });
+                
+                // If we have a user ID (either from Telegram or URL), create user object
+                if (telegramUser || userId) {
+                    return {
+                        id: telegramUser ? telegramUser.id : userId,
+                        firstName: telegramUser ? telegramUser.first_name : (userId === '8403188272' ? 'Tayden' : 'User'),
+                        lastName: telegramUser ? telegramUser.last_name : '',
+                        username: telegramUser ? telegramUser.username : null,
+                        languageCode: telegramUser ? telegramUser.language_code : 'en',
+                        fromBot: fromBot
+                    };
+                }
+                
+                return null;
+            } catch (e) {
+                console.error('❌ Error extracting user data:', e);
+                return null;
+            }
+        }
+        
+        // Load user data from backend
+        async function loadUserData(userId) {
+            try {
+                console.log('👤 Loading user data for ID:', userId);
+                var response = await fetch('${baseUrl}/api/user/' + userId);
+                if (response.ok) {
+                    var userData = await response.json();
+                    console.log('✅ User data loaded:', userData);
+                    return userData;
+                } else {
+                    console.log('ℹ️ User not found, needs registration');
+                    return null;
+                }
+            } catch (e) {
+                console.error('❌ Error loading user data:', e);
+                return null;
+            }
+        }
+        
+        // Register new user
+        async function registerUser(telegramUser) {
+            try {
+                console.log('📝 Registering new user:', telegramUser);
+                var userData = {
+                    id: telegramUser.id,
+                    firstName: telegramUser.firstName,
+                    lastName: telegramUser.lastName,
+                    username: telegramUser.username,
+                    languageCode: telegramUser.languageCode,
+                    balance: 10.00, // Welcome bonus
+                    registered: true,
+                    createdAt: new Date().toISOString()
+                };
+                
+                var response = await fetch('${baseUrl}/api/user/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(userData)
+                });
+                
+                if (response.ok) {
+                    var result = await response.json();
+                    console.log('✅ User registered successfully:', result);
+                    return result;
+                } else {
+                    throw new Error('Registration failed');
+                }
+            } catch (e) {
+                console.error('❌ Error registering user:', e);
+                return null;
+            }
+        }
+        
+        setTimeout(async function() {
+            console.log('🔧 Starting authentication flow...');
+            
+            // Get user from Telegram
+            var telegramUser = getUserFromTelegram();
+            console.log('👤 Telegram user:', telegramUser);
+            
+            var userEl = document.getElementById('userType');
+            var balanceEl = document.getElementById('balance');
+            
+            if (telegramUser && telegramUser.id) {
+                // Try to load existing user
+                var userData = await loadUserData(telegramUser.id);
+                
+                if (userData) {
+                    // Existing user - show their data
+                    console.log('✅ Existing user found');
+                    if (userEl) {
+                        userEl.textContent = '👋 Welcome back, ' + userData.firstName + '!';
+                        userEl.style.color = '#4CAF50';
+                    }
+                    if (balanceEl) {
+                        balanceEl.textContent = '$' + (userData.balance || 10.00).toFixed(2);
+                    }
+                    // Update wallet tab balance too
+                    var walletBalanceEl = document.getElementById('wallet-balance');
+                    if (walletBalanceEl) {
+                        walletBalanceEl.textContent = '$' + (userData.balance || 10.00).toFixed(2);
+                    }
+                } else {
+                    // New user - register them
+                    console.log('🆕 New user, registering...');
+                    if (userEl) {
+                        userEl.textContent = '� Registering ' + telegramUser.firstName + '...';
+                        userEl.style.color = '#FFA500';
                     }
                     
-                    if (tabButton) {
-                        if (tabs[i] === tabName) {
-                            tabButton.classList.add('active');
-                        } else {
-                            tabButton.classList.remove('active');
+                    var registeredUser = await registerUser(telegramUser);
+                    if (registeredUser) {
+                        if (userEl) {
+                            userEl.textContent = '🎉 Welcome ' + registeredUser.firstName + '! $10 bonus added!';
+                            userEl.style.color = '#4CAF50';
                         }
-                    }
-                }
-            };
-            
-            // Add hide debug function
-            window.hideDebugPanel = function() {
-                var debugPanel = document.getElementById('debug-panel');
-                if (debugPanel) {
-                    debugPanel.style.display = 'none';
-                }
-            };
-            
-            console.log('✅ Added tab functionality');
-            
-            // Set up DOM ready handler for price loading
-            function loadPricesWhenReady() {
-                console.log('🔧 DOM ready check...');
-                try {
-                    var baseUrlEl = document.getElementById('debug-base-url');
-                    var fetchEl = document.getElementById('debug-fetch');
-                    var statusEl = document.getElementById('debug-status');
-                    
-                    if (baseUrlEl && fetchEl && statusEl) {
-                        console.log('✅ All debug elements found');
-                        
-                        baseUrlEl.textContent = '${baseUrl}';
-                        fetchEl.textContent = typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE';
-                        statusEl.textContent = 'loading prices...';
-                        
-                        // Load prices
-                        console.log('🚀 Loading prices...');
-                        fetch('${baseUrl}/api/prices')
-                            .then(function(response) {
-                                console.log('📥 Response received:', response.status);
-                                statusEl.textContent = 'response: ' + response.status;
-                                return response.json();
-                            })
-                            .then(function(data) {
-                                console.log('✅ Data received:', data);
-                                statusEl.textContent = 'displaying prices...';
-                                
-                                // Display prices
-                                var cryptoList = document.getElementById('crypto-list');
-                                if (cryptoList) {
-                                    var html = '';
-                                    for (var i = 0; i < data.length; i++) {
-                                        var crypto = data[i];
-                                        var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
-                                        var changeSymbol = crypto.change >= 0 ? '+' : '';
-                                        html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
-                                        html += '<div class="crypto-info">';
-                                        html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
-                                        html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
-                                        html += '</div>';
-                                        html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
-                                        html += '</div>';
-                                    }
-                                    cryptoList.innerHTML = html;
-                                    console.log('✅ Prices displayed successfully');
-                                    statusEl.textContent = 'prices loaded!';
-                                    
-                                    // Add crypto selection functionality
-                                    window.selectCrypto = function(symbol) {
-                                        console.log('🎯 Selected crypto:', symbol);
-                                        alert('Selected ' + symbol + '! Trading functionality coming soon.');
-                                    };
-                                    
-                                } else {
-                                    console.log('❌ crypto-list element not found');
-                                    statusEl.textContent = 'ERROR: no crypto-list';
-                                }
-                            })
-                            .catch(function(error) {
-                                console.error('❌ Error loading prices:', error);
-                                statusEl.textContent = 'ERROR: ' + error.message;
-                            });
+                        if (balanceEl) {
+                            balanceEl.textContent = '$' + (registeredUser.balance || 10.00).toFixed(2);
+                        }
+                        // Update wallet tab balance too
+                        var walletBalanceEl = document.getElementById('wallet-balance');
+                        if (walletBalanceEl) {
+                            walletBalanceEl.textContent = '$' + (registeredUser.balance || 10.00).toFixed(2);
+                        }
                     } else {
-                        console.log('❌ Some debug elements not found, retrying...');
-                        setTimeout(loadPricesWhenReady, 100);
+                        if (userEl) {
+                            userEl.textContent = '❌ Registration failed - Demo Mode';
+                            userEl.style.color = '#f44336';
+                        }
                     }
-                } catch (e) {
-                    console.error('❌ Error in loadPricesWhenReady:', e);
+                }
+            } else {
+                // No user data available - fallback to demo
+                console.log('⚠️ No user data available, using demo mode');
+                if (userEl) {
+                    userEl.textContent = '�👤 Demo Mode (No Telegram data)';
+                    userEl.style.color = '#888';
                 }
             }
             
-            // Start loading process
-            setTimeout(loadPricesWhenReady, 100);
-            
-        } catch (e) {
-            console.error('❌ Error in immediate script:', e);
-        }
+            // Load cryptocurrency prices
+            console.log('💰 Loading cryptocurrency prices...');
+            fetch('${baseUrl}/api/prices')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    var cryptoList = document.getElementById('crypto-list');
+                    if (cryptoList) {
+                        var html = '';
+                        for (var i = 0; i < data.length; i++) {
+                            var crypto = data[i];
+                            var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
+                            var changeSymbol = crypto.change >= 0 ? '+' : '';
+                            html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
+                            html += '<div class="crypto-info">';
+                            html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
+                            html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
+                            html += '</div>';
+                            html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
+                            html += '</div>';
+                        }
+                        cryptoList.innerHTML = html;
+                        console.log('✅ Prices loaded successfully');
+                        
+                        // Add crypto selection functionality
+                        window.selectCrypto = function(symbol) {
+                            console.log('🎯 Selected crypto:', symbol);
+                            alert('Selected ' + symbol + '! Trading functionality coming soon.');
+                        };
+                        
+                        // Add tab functionality
+                        window.showTab = function(tabName) {
+                            console.log('🔄 Tab clicked:', tabName);
+                            var tabs = ['trade', 'portfolio', 'wallet', 'history'];
+                            for (var i = 0; i < tabs.length; i++) {
+                                var tabEl = document.getElementById(tabs[i] + '-tab');
+                                if (tabEl) {
+                                    tabEl.style.display = tabs[i] === tabName ? 'block' : 'none';
+                                }
+                            }
+                        };
+                    }
+                })
+                .catch(function(error) {
+                    console.error('❌ Error loading prices:', error);
+                });
+                
+        }, 500);
     </script>
 
     <div class="container">
@@ -1389,16 +1572,7 @@ function MINIAPP_HTML(env: Env) {
             <h1>🚀 TradeX Pro</h1>
             <p>AI-Powered Trading Bot</p>
             <div style="font-size: 0.8rem; color: #ccc;" id="userType">Loading...</div>
-            
-            <!-- VISUAL PROGRESS INDICATOR -->
-            <div id="progress-indicator" style="background: rgba(255,255,255,0.1); padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 12px;">
-                <div style="color: yellow; font-weight: bold;">🔄 LOADING PROGRESS:</div>
-                <div id="step1" style="color: #666;">1. ⏳ DOM Loading...</div>
-                <div id="step2" style="color: #666;">2. ⏳ Scripts Initializing...</div>
-                <div id="step3" style="color: #666;">3. ⏳ User Info Loading...</div>
-                <div id="step4" style="color: #666;">4. ⏳ Prices Loading...</div>
-                <div id="step5" style="color: #666;">5. ⏳ UI Activation...</div>
-            </div>
+            <div style="font-size: 0.9rem; color: #4CAF50; margin-top: 5px;" id="balance">$10.00</div>
         </div>
         
         <div class="nav-tabs">
@@ -2121,177 +2295,6 @@ function MINIAPP_HTML(env: Env) {
                 loadPrices();
             }
         }, 2000);
-    </script>
-    
-    <!-- FINAL WORKING SCRIPT - RUNS LAST -->
-    <script>
-        console.log('🚀 FINAL SCRIPT EXECUTING...');
-        
-        function updateStep(stepNum, status, message) {
-            var stepEl = document.getElementById('step' + stepNum);
-            if (stepEl) {
-                var icon = status === 'success' ? '✅' : status === 'error' ? '❌' : '🔄';
-                var color = status === 'success' ? '#4CAF50' : status === 'error' ? '#f44336' : '#FFA500';
-                stepEl.innerHTML = stepNum + '. ' + icon + ' ' + message;
-                stepEl.style.color = color;
-            }
-            console.log('STEP ' + stepNum + ' [' + status.toUpperCase() + ']: ' + message);
-        }
-        
-        // STEP 1: DOM Check
-        console.log('📋 STEP 1: Checking DOM elements...');
-        updateStep(1, 'progress', 'Checking DOM elements...');
-        
-        var userEl = document.getElementById('userType');
-        var cryptoList = document.getElementById('crypto-list');
-        var debugLog = document.getElementById('debug-log');
-        
-        console.log('👤 userEl found:', !!userEl);
-        console.log('💰 cryptoList found:', !!cryptoList);
-        console.log('🔧 debugLog found:', !!debugLog);
-        
-        if (userEl && cryptoList) {
-            updateStep(1, 'success', 'DOM elements found');
-        } else {
-            updateStep(1, 'error', 'Missing DOM elements');
-            console.error('❌ Missing critical DOM elements');
-            return;
-        }
-        
-        // STEP 2: Scripts Initialization
-        console.log('🔧 STEP 2: Initializing scripts...');
-        updateStep(2, 'progress', 'Initializing scripts...');
-        
-        try {
-            // Test fetch availability
-            if (typeof fetch === 'undefined') {
-                throw new Error('Fetch API not available');
-            }
-            
-            // Test basic JavaScript functions
-            var testArray = [1, 2, 3];
-            var testResult = testArray.map(function(x) { return x * 2; });
-            console.log('🧪 JavaScript test:', testResult);
-            
-            updateStep(2, 'success', 'Scripts initialized');
-        } catch (e) {
-            updateStep(2, 'error', 'Script initialization failed: ' + e.message);
-            console.error('❌ Script initialization error:', e);
-            return;
-        }
-        
-        // STEP 3: Fix User Info
-        console.log('👤 STEP 3: Fixing user info...');
-        updateStep(3, 'progress', 'Updating user info...');
-        
-        try {
-            userEl.textContent = '👤 Demo Mode';
-            userEl.style.color = '#888';
-            updateStep(3, 'success', 'User info updated');
-            console.log('✅ User info fixed');
-        } catch (e) {
-            updateStep(3, 'error', 'User info update failed: ' + e.message);
-            console.error('❌ User info error:', e);
-        }
-        
-        // STEP 4: Load Prices
-        console.log('💰 STEP 4: Loading cryptocurrency prices...');
-        updateStep(4, 'progress', 'Fetching prices from API...');
-        
-        var apiUrl = '${baseUrl}/api/prices';
-        console.log('🌐 API URL:', apiUrl);
-        
-        // Add detailed network debugging
-        fetch(apiUrl)
-            .then(function(response) {
-                console.log('📡 NETWORK RESPONSE:');
-                console.log('  Status:', response.status);
-                console.log('  StatusText:', response.statusText);
-                console.log('  Headers:', response.headers);
-                console.log('  OK:', response.ok);
-                console.log('  Type:', response.type);
-                console.log('  URL:', response.url);
-                
-                if (!response.ok) {
-                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-                }
-                
-                updateStep(4, 'progress', 'Response received (' + response.status + '), parsing JSON...');
-                return response.json();
-            })
-            .then(function(data) {
-                console.log('📊 API DATA RECEIVED:');
-                console.log('  Type:', typeof data);
-                console.log('  Length:', data.length);
-                console.log('  Data:', data);
-                
-                updateStep(4, 'progress', 'Data parsed, displaying ' + data.length + ' items...');
-                
-                // Generate HTML with detailed logging
-                var html = '';
-                for (var i = 0; i < data.length; i++) {
-                    var crypto = data[i];
-                    console.log('🪙 Processing crypto ' + (i+1) + ':', crypto.symbol, crypto.name, crypto.price, crypto.change);
-                    
-                    var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
-                    var changeSymbol = crypto.change >= 0 ? '+' : '';
-                    html += '<div class="crypto-item" onclick="alert(\'Selected ' + crypto.symbol + '!\')">';
-                    html += '<div class="crypto-info">';
-                    html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
-                    html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
-                    html += '</div>';
-                    html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
-                    html += '</div>';
-                }
-                
-                console.log('🎨 Generated HTML length:', html.length);
-                console.log('🎨 HTML preview:', html.substring(0, 200) + '...');
-                
-                cryptoList.innerHTML = html;
-                updateStep(4, 'success', 'Prices displayed successfully (' + data.length + ' items)');
-                console.log('✅ Prices displayed successfully');
-                
-                // STEP 5: Activate UI
-                console.log('🎮 STEP 5: Activating UI interactions...');
-                updateStep(5, 'progress', 'Setting up UI interactions...');
-                
-                // Add tab functionality with detailed logging
-                window.showTab = function(tabName) {
-                    console.log('🔄 Tab clicked:', tabName);
-                    var tabs = ['trade', 'portfolio', 'wallet', 'history'];
-                    for (var i = 0; i < tabs.length; i++) {
-                        var tabEl = document.getElementById(tabs[i] + '-tab');
-                        if (tabEl) {
-                            tabEl.style.display = tabs[i] === tabName ? 'block' : 'none';
-                            console.log('📑 Tab ' + tabs[i] + ':', tabs[i] === tabName ? 'shown' : 'hidden');
-                        }
-                    }
-                };
-                
-                updateStep(5, 'success', 'All systems operational!');
-                console.log('🎉 INITIALIZATION COMPLETE - ALL SYSTEMS OPERATIONAL!');
-                
-                // Hide progress indicator after success
-                setTimeout(function() {
-                    var progressEl = document.getElementById('progress-indicator');
-                    if (progressEl) {
-                        progressEl.style.display = 'none';
-                    }
-                }, 3000);
-                
-            })
-            .catch(function(error) {
-                console.error('❌ FETCH ERROR:');
-                console.error('  Message:', error.message);
-                console.error('  Stack:', error.stack);
-                console.error('  Name:', error.name);
-                
-                updateStep(4, 'error', 'API Error: ' + error.message);
-                
-                // Show fallback content
-                cryptoList.innerHTML = '<div style="text-align: center; padding: 20px; color: #f44336;">❌ Failed to load prices: ' + error.message + '</div>';
-            });
-            
     </script>
 </body>
 </html>`;
