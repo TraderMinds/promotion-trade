@@ -1,11 +1,8 @@
 /// <reference types="@cloudflare/workers-types" />
-import { getUserState, appendTrade, saveUserState } from './logic/storage.js';
-import { runTrade, simulateTicks, mockAISignal, getRealPrice, runRealTrade } from './logic/pricing.js';
-import { calculateUserStats, checkAchievements, calculatePortfolioMetrics, ACHIEVEMENTS } from './logic/features.js';
 
 interface Env {
-  TRADING_KV: KVNamespace;
   TELEGRAM_BOT_TOKEN: string;
+  TRADING_KV: KVNamespace;
   BASE_URL: string;
   MINIAPP_URL: string;
 }
@@ -13,353 +10,782 @@ interface Env {
 interface TelegramUpdate {
   message?: {
     message_id: number;
-    chat: { id: number; type: string; };
-    from?: { id: number; first_name?: string; username?: string };
+    from: { id: number; first_name: string; username?: string };
+    chat: { id: number };
     text?: string;
-    date: number;
   };
-  // other fields ignored for brevity
+  callback_query?: {
+    id: string;
+    from: { id: number; first_name: string; username?: string };
+    message: { message_id: number; chat: { id: number } };
+    data: string;
+  };
+}
+
+const LANGUAGES = {
+  en: {
+    name: 'English',
+    flag: '🇺🇸',
+    welcome_select_language: '🌍 **Welcome to TradeX Pro!**\\n\\nPlease select your preferred language:',
+    welcome_register: '🚀 **Welcome to TradeX Pro, {}!**\\n\\n🎁 **Special Gift:** Receive $10 FREE to start trading!\\n\\nClick "Register & Get $10" to claim your bonus!',
+    welcome_existing: '🚀 **Welcome back, {}!**\\n\\nYour account is ready for trading!\\n\\n💰 **Balance:** ${:.2f}\\n📊 **Total Trades:** {}\\n🏆 **Win Rate:** {:.1f}%',
+    register_success: '🎉 **Registration Successful!**\\n\\n💰 **$10 Gift Added!** Your starting balance is now $10\\n\\nReady to start AI-powered trading?',
+    trade_button: '🚀 Open TradeX Pro',
+    stats_button: '📊 My Stats',
+    deposit_button: '💰 Deposit',
+    withdraw_button: '💸 Withdraw',
+    history_button: '📜 History',
+    language_button: '🌍 Language',
+    language_selected: '✅ Language set to English!',
+    register_button: '🎁 Register & Get $10'
+  },
+  es: {
+    name: 'Español',
+    flag: '🇪🇸',
+    welcome_select_language: '🌍 **¡Bienvenido a TradeX Pro!**\\n\\nPor favor selecciona tu idioma preferido:',
+    welcome_register: '🚀 **¡Bienvenido a TradeX Pro, {}!**\\n\\n🎁 **Regalo Especial:** ¡Recibe $10 GRATIS para empezar a operar!\\n\\n¡Haz clic en "Registrarse y Obtener $10" para reclamar tu bono!',
+    welcome_existing: '🚀 **¡Bienvenido de vuelta, {}!**\\n\\n¡Tu cuenta está lista para operar!\\n\\n💰 **Saldo:** ${:.2f}\\n📊 **Operaciones Totales:** {}\\n🏆 **Tasa de Éxito:** {:.1f}%',
+    register_success: '🎉 **¡Registro Exitoso!**\\n\\n💰 **¡$10 de Regalo Añadido!** Tu saldo inicial es ahora $10\\n\\n¿Listo para empezar a operar con IA?',
+    trade_button: '🚀 Abrir TradeX Pro',
+    stats_button: '📊 Mis Estadísticas',
+    deposit_button: '💰 Depositar',
+    withdraw_button: '💸 Retirar',
+    history_button: '📜 Historial',
+    language_button: '🌍 Idioma',
+    language_selected: '✅ ¡Idioma establecido en Español!',
+    register_button: '🎁 Registrarse y Obtener $10'
+  },
+  fr: {
+    name: 'Français',
+    flag: '🇫🇷',
+    welcome_select_language: '🌍 **Bienvenue sur TradeX Pro !**\\n\\nVeuillez sélectionner votre langue préférée :',
+    welcome_register: '🚀 **Bienvenue sur TradeX Pro, {} !**\\n\\n🎁 **Cadeau spécial :** Recevez 10 $ GRATUITS pour commencer à trader !\\n\\nCliquez sur "S\'inscrire et obtenir 10 $" pour réclamer votre bonus !',
+    welcome_existing: '🚀 **Bon retour, {} !**\\n\\nVotre compte est prêt pour le trading !\\n\\n💰 **Solde :** {:.2f} $\\n📊 **Total des trades :** {}\\n🏆 **Taux de réussite :** {:.1f}%',
+    register_success: '🎉 **Inscription réussie !**\\n\\n💰 **10 $ de cadeau ajoutés !** Votre solde initial est maintenant de 10 $\\n\\nPrêt à commencer le trading IA ?',
+    trade_button: '🚀 Ouvrir TradeX Pro',
+    stats_button: '📊 Mes Statistiques',
+    deposit_button: '💰 Dépôt',
+    withdraw_button: '💸 Retrait',
+    history_button: '📜 Historique',
+    language_button: '🌍 Langue',
+    language_selected: '✅ Langue définie en Français !',
+    register_button: '🎁 S\'inscrire et obtenir 10 $'
+  },
+  de: {
+    name: 'Deutsch',
+    flag: '🇩🇪',
+    welcome_select_language: '🌍 **Willkommen bei TradeX Pro!**\\n\\nBitte wählen Sie Ihre bevorzugte Sprache:',
+    welcome_register: '🚀 **Willkommen bei TradeX Pro, {} !**\\n\\n🎁 **Spezielles Geschenk:** Erhalten Sie 10 $ KOSTENLOS um mit dem Trading zu beginnen!\\n\\nKlicken Sie auf "Registrieren & 10$ erhalten" um Ihren Bonus zu erhalten!',
+    welcome_existing: '🚀 **Willkommen zurück, {} !**\\n\\nIhr Konto ist bereit zum Trading!\\n\\n💰 **Guthaben:** {:.2f} $\\n📊 **Gesamt Trades:** {}\\n🏆 **Erfolgsrate:** {:.1f}%',
+    register_success: '🎉 **Registrierung erfolgreich!**\\n\\n💰 **10 $ Geschenk hinzugefügt!** Ihr Startguthaben beträgt jetzt 10 $\\n\\nBereit für AI Trading?',
+    trade_button: '🚀 TradeX Pro öffnen',
+    stats_button: '📊 Meine Statistiken',
+    deposit_button: '💰 Einzahlen',
+    withdraw_button: '💸 Auszahlen',
+    history_button: '📜 Verlauf',
+    language_button: '🌍 Sprache',
+    language_selected: '✅ Sprache auf Deutsch eingestellt!',
+    register_button: '🎁 Registrieren & 10$ erhalten'
+  }
+};
+
+function getLanguage(code: string) {
+  return LANGUAGES[code as keyof typeof LANGUAGES] || LANGUAGES.en;
+}
+
+function getTexts(langCode: string) {
+  return getLanguage(langCode);
+}
+
+function json(obj: any, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+async function handlePriceAPI(env: Env): Promise<Response> {
+  try {
+    // Cache key for prices
+    const cacheKey = 'crypto_prices';
+    
+    // Try to get cached data first
+    const cached = await env.TRADING_KV.get(cacheKey);
+    if (cached) {
+      const data = JSON.parse(cached);
+      // Check if cache is less than 1 minute old
+      if (Date.now() - data.timestamp < 60000) {
+        return new Response(JSON.stringify(data.prices), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    // Fetch fresh data from CoinGecko
+    const response = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,binancecoin,cardano,solana,polkadot,avalanche-2,chainlink,polygon,uniswap&vs_currencies=usd&include_24hr_change=true'
+    );
+    
+    if (!response.ok) {
+      throw new Error(`API Error: ${response.status}`);
+    }
+    
+    const priceData = await response.json() as any;
+    
+    // Transform to our format
+    const cryptoPrices = [
+      { symbol: 'BTC', name: 'Bitcoin', price: priceData.bitcoin?.usd || 0, change: priceData.bitcoin?.usd_24h_change || 0 },
+      { symbol: 'ETH', name: 'Ethereum', price: priceData.ethereum?.usd || 0, change: priceData.ethereum?.usd_24h_change || 0 },
+      { symbol: 'BNB', name: 'BNB', price: priceData.binancecoin?.usd || 0, change: priceData.binancecoin?.usd_24h_change || 0 },
+      { symbol: 'ADA', name: 'Cardano', price: priceData.cardano?.usd || 0, change: priceData.cardano?.usd_24h_change || 0 },
+      { symbol: 'SOL', name: 'Solana', price: priceData.solana?.usd || 0, change: priceData.solana?.usd_24h_change || 0 },
+      { symbol: 'DOT', name: 'Polkadot', price: priceData.polkadot?.usd || 0, change: priceData.polkadot?.usd_24h_change || 0 },
+      { symbol: 'AVAX', name: 'Avalanche', price: priceData['avalanche-2']?.usd || 0, change: priceData['avalanche-2']?.usd_24h_change || 0 },
+      { symbol: 'LINK', name: 'Chainlink', price: priceData.chainlink?.usd || 0, change: priceData.chainlink?.usd_24h_change || 0 },
+      { symbol: 'MATIC', name: 'Polygon', price: priceData.polygon?.usd || 0, change: priceData.polygon?.usd_24h_change || 0 },
+      { symbol: 'UNI', name: 'Uniswap', price: priceData.uniswap?.usd || 0, change: priceData.uniswap?.usd_24h_change || 0 }
+    ];
+    
+    // Cache the result
+    const cacheData = {
+      prices: cryptoPrices,
+      timestamp: Date.now()
+    };
+    
+    await env.TRADING_KV.put(cacheKey, JSON.stringify(cacheData), { expirationTtl: 300 }); // 5 minutes TTL
+    
+    return new Response(JSON.stringify(cryptoPrices), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Price API error:', error);
+    
+    // Return mock data if API fails
+    const mockPrices = [
+      { symbol: 'BTC', name: 'Bitcoin', price: 45000, change: 2.5 },
+      { symbol: 'ETH', name: 'Ethereum', price: 3200, change: -1.2 },
+      { symbol: 'BNB', name: 'BNB', price: 320, change: 0.8 },
+      { symbol: 'ADA', name: 'Cardano', price: 0.5, change: 5.2 },
+      { symbol: 'SOL', name: 'Solana', price: 120, change: -3.1 }
+    ];
+    
+    return new Response(JSON.stringify(mockPrices), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleWalletAPI(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = await request.json() as any;
+    const { action, userId, amount } = body;
+    
+    if (!userId || !action) {
+      return new Response(JSON.stringify({ error: 'Missing required fields' }), { 
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Get current user data
+    const userData = await getUserData(parseInt(userId), env);
+    
+    if (action === 'deposit') {
+      if (!amount || amount <= 0) {
+        return new Response(JSON.stringify({ error: 'Invalid deposit amount' }), { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      userData.balance = (userData.balance || 10) + parseFloat(amount);
+      userData.transactions = userData.transactions || [];
+      userData.transactions.unshift({
+        type: 'deposit',
+        amount: parseFloat(amount),
+        timestamp: new Date().toISOString(),
+        id: Date.now().toString()
+      });
+      
+      await saveUserData(parseInt(userId), userData, env);
+      
+      return new Response(JSON.stringify({ 
+        success: true, 
+        balance: userData.balance,
+        message: `$${amount} deposited successfully!`
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } else if (action === 'withdraw') {
+      if (!amount || amount <= 0) {
+        return new Response(JSON.stringify({ error: 'Invalid withdrawal amount' }), { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      if (amount > userData.balance) {
+        return new Response(JSON.stringify({ error: 'Insufficient balance' }), { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      userData.balance -= parseFloat(amount);
+      userData.transactions = userData.transactions || [];
+      userData.transactions.unshift({
+        type: 'withdrawal',
+        amount: parseFloat(amount),
+        timestamp: new Date().toISOString(),
+        id: Date.now().toString()
+      });
+      
+      await saveUserData(parseInt(userId), userData, env);
+      
+      return new Response(JSON.stringify({ 
+        success: true, 
+        balance: userData.balance,
+        message: `$${amount} withdrawn successfully!`
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } else {
+      return new Response(JSON.stringify({ error: 'Invalid action' }), { 
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  } catch (error) {
+    console.error('Wallet API error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleUserDataAPI(url: URL, env: Env): Promise<Response> {
+  try {
+    const userId = url.searchParams.get('userId');
+    
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Missing userId parameter' }), { 
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const userData = await getUserData(parseInt(userId), env);
+    
+    // Return user data without sensitive information
+    return new Response(JSON.stringify({
+      balance: userData.balance || 10,
+      positions: userData.positions || [],
+      tradeHistory: userData.tradeHistory || [],
+      transactions: userData.transactions || [],
+      totalTrades: userData.totalTrades || 0,
+      winRate: userData.winRate || 0,
+      registered: userData.registered || false
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('User data API error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = await request.json() as any;
+    const { userId, type, symbol, amount, price } = body;
+    
+    if (!userId || !type || !symbol || !amount || !price) {
+      return new Response(JSON.stringify({ error: 'Missing required fields' }), { 
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const userData = await getUserData(parseInt(userId), env);
+    const quantity = amount / price;
+    
+    // Initialize arrays if they don't exist
+    userData.positions = userData.positions || [];
+    userData.tradeHistory = userData.tradeHistory || [];
+    userData.totalTrades = userData.totalTrades || 0;
+    userData.winningTrades = userData.winningTrades || 0;
+    
+    if (type === 'buy') {
+      if (amount > userData.balance) {
+        return new Response(JSON.stringify({ error: 'Insufficient balance' }), { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      userData.balance -= amount;
+      
+      // Add to positions
+      const existingPos = userData.positions.find((p: any) => p.symbol === symbol);
+      if (existingPos) {
+        const totalValue = existingPos.quantity * existingPos.avgPrice + amount;
+        existingPos.quantity += quantity;
+        existingPos.avgPrice = totalValue / existingPos.quantity;
+      } else {
+        userData.positions.push({
+          symbol: symbol,
+          quantity: quantity,
+          avgPrice: price,
+          openTime: new Date().toISOString()
+        });
+      }
+    } else if (type === 'sell') {
+      const position = userData.positions.find((p: any) => p.symbol === symbol);
+      if (!position || position.quantity < quantity) {
+        return new Response(JSON.stringify({ error: 'Insufficient position to sell' }), { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      userData.balance += amount;
+      
+      // Calculate P&L for statistics
+      const soldValue = quantity * price;
+      const boughtValue = quantity * position.avgPrice;
+      const pnl = soldValue - boughtValue;
+      const isWinning = pnl > 0;
+      
+      userData.totalTrades += 1;
+      if (isWinning) {
+        userData.winningTrades += 1;
+      }
+      
+      position.quantity -= quantity;
+      
+      if (position.quantity <= 0.0001) {
+        userData.positions = userData.positions.filter((p: any) => p.symbol !== symbol);
+      }
+      
+      // Add detailed trade record
+      userData.tradeHistory.unshift({
+        type: 'sell',
+        symbol: symbol,
+        quantity: quantity,
+        price: price,
+        amount: amount,
+        pnl: pnl,
+        pnlPercent: (pnl / boughtValue) * 100,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Add general trade history record
+    userData.tradeHistory.unshift({
+      type: type,
+      symbol: symbol,
+      quantity: quantity,
+      price: price,
+      amount: amount,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Calculate win rate
+    userData.winRate = userData.totalTrades > 0 ? (userData.winningTrades / userData.totalTrades) * 100 : 0;
+    
+    await saveUserData(parseInt(userId), userData, env);
+    
+    return new Response(JSON.stringify({ 
+      success: true, 
+      balance: userData.balance,
+      positions: userData.positions,
+      tradeHistory: userData.tradeHistory.slice(0, 20), // Return latest 20 trades
+      totalTrades: userData.totalTrades,
+      winRate: userData.winRate,
+      message: `${type.toUpperCase()} order executed: ${quantity.toFixed(6)} ${symbol} for $${amount.toFixed(2)}`
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Trade API error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function sendTelegram(env: Env, method: string, params: any): Promise<any> {
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  
+  const result = await response.json() as any;
+  if (!result.ok) {
+    console.error('Telegram API error:', result);
+    throw new Error(`Telegram API error: ${result.description}`);
+  }
+  
+  return result;
 }
 
 export default {
-  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(req.url);
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    
+    // Basic health check
     if (url.pathname === '/') {
-      return new Response('Promotion Trade Bot Worker', { status: 200 });
+      return new Response('Promotion Trade Bot Worker');
     }
-
-    if (url.pathname === '/webhook' && req.method === 'POST') {
-      const update: TelegramUpdate = await req.json();
-      if (update.message && update.message.text) {
-        return await handleTelegram(update, env);
-      }
-      return new Response('ok');
+    
+    // Handle webhook
+    if (url.pathname === '/webhook' && request.method === 'POST') {
+      return handleTelegram(request, env);
     }
-
-    if (url.pathname.startsWith('/api/')) {
-      return await handleApi(req, env);
-    }
-
+    
+    // Serve miniapp
     if (url.pathname.startsWith('/miniapp')) {
       return serveMiniApp(url, env);
     }
-
+    
+    // Handle price API
+    if (url.pathname === '/api/prices' && request.method === 'GET') {
+      return handlePriceAPI(env);
+    }
+    
+    // Handle wallet operations API
+    if (url.pathname === '/api/wallet' && request.method === 'POST') {
+      return handleWalletAPI(request, env);
+    }
+    
+    // Handle user data API
+    if (url.pathname === '/api/user' && request.method === 'GET') {
+      return handleUserDataAPI(url, env);
+    }
+    
+    // Handle trade execution API
+    if (url.pathname === '/api/trade' && request.method === 'POST') {
+      return handleTradeAPI(request, env);
+    }
+    
     return new Response('Not found', { status: 404 });
   }
 };
 
-async function handleTelegram(update: TelegramUpdate, env: Env): Promise<Response> {
-  const msg = update.message!;
-  const chatId = msg.chat.id;
-  const text = msg.text || '';
+async function handleTelegram(request: Request, env: Env): Promise<Response> {
+  try {
+    const update: TelegramUpdate = await request.json();
+    
+    if (update.message) {
+      return handleMessage(update.message, env);
+    }
+    
+    if (update.callback_query) {
+      return handleCallbackQuery(update.callback_query, env);
+    }
+    
+    return new Response('ok');
+  } catch (error) {
+    console.error('Error handling telegram update:', error);
+    return new Response('error', { status: 500 });
+  }
+}
 
-  if (text.startsWith('/start')) {
-    const startPayload = JSON.stringify({ url: env.MINIAPP_URL });
-    const reply = `Welcome! Tap the button below to open the trading mini app.`;
+async function handleMessage(message: any, env: Env): Promise<Response> {
+  try {
+    const chatId = message.chat.id;
+    const userId = message.from.id;
+    const text = message.text || '';
+    const userName = message.from.first_name || 'User';
+    
+    console.log(`Message from ${userName} (${userId}): ${text}`);
+    
+    if (text.startsWith('/start')) {
+      console.log('Processing /start command');
+      
+      try {
+        // Get or create user data
+        let userData = await getUserData(userId, env);
+        console.log('User data loaded:', userData ? 'exists' : 'null');
+
+        if (!userData || !userData.registered) {
+          // New user - show language selection
+          console.log('New user - showing language selection');
+          await showLanguageSelection(chatId, env);
+          console.log('Language selection sent successfully');
+        } else {
+          // Existing user - show main menu
+          console.log('Existing user - showing main menu');
+          await showMainMenu(chatId, userId, userData, env);
+          console.log('Main menu sent successfully');
+        }
+      } catch (error) {
+        console.error('Error handling /start command:', error);
+        // Send a simple fallback message
+        await sendTelegram(env, 'sendMessage', {
+          chat_id: chatId,
+          text: '🤖 Welcome to TradeX Pro! Please try again.'
+        });
+      }
+      return new Response('ok');
+    }
+    
+    if (text.startsWith('/help')) {
+      const helpText = `🤖 **TradeX Pro Bot Help**
+
+🚀 **/start** - Start the bot and access trading
+📊 **Trading** - Open the mini app to trade
+💰 **Deposit** - Add funds to your account
+💸 **Withdraw** - Withdraw your profits
+📜 **History** - View your trading history
+🌍 **Language** - Change language
+
+💡 **How it works:**
+1. Register and get $10 free
+2. Use AI-powered signals
+3. Trade and grow your balance
+
+📞 **Support:** Contact @support for help`;
+      
+      await sendTelegram(env, 'sendMessage', {
+        chat_id: chatId,
+        text: helpText,
+        parse_mode: 'Markdown'
+      });
+      return new Response('ok');
+    }
+    
+    // Default response
     await sendTelegram(env, 'sendMessage', {
       chat_id: chatId,
-      text: reply,
-      reply_markup: {
-        inline_keyboard: [[{ text: 'Open Trading Mini App', web_app: { url: env.MINIAPP_URL } }]]
-      }
+      text: 'Use /start to begin trading! 🚀'
     });
+    
+    return new Response('ok');
+  } catch (error) {
+    console.error('Error in handleMessage:', error);
+    // Send error response
+    if (message?.chat?.id) {
+      await sendTelegram(env, 'sendMessage', {
+        chat_id: message.chat.id,
+        text: '🤖 Welcome to TradeX Pro! Please try again.'
+      });
+    }
     return new Response('ok');
   }
+}
 
-  await sendTelegram(env, 'sendMessage', { chat_id: chatId, text: 'Use /start to begin.' });
+async function handleCallbackQuery(callbackQuery: any, env: Env): Promise<Response> {
+  const chatId = callbackQuery.message.chat.id;
+  const userId = callbackQuery.from.id;
+  const data = callbackQuery.data;
+  const userName = callbackQuery.from.first_name || 'User';
+  const messageId = callbackQuery.message.message_id;
+  
+  console.log(`Callback from ${userName} (${userId}): ${data}`);
+  
+  // Answer callback query to remove loading state
+  await sendTelegram(env, 'answerCallbackQuery', {
+    callback_query_id: callbackQuery.id
+  });
+  
+  // Handle language selection
+  if (data.startsWith('lang_')) {
+    const selectedLang = data.replace('lang_', '');
+    console.log(`Language selected: ${selectedLang}`);
+    await handleLanguageSelection(chatId, userId, selectedLang, userName, messageId, env);
+    return new Response('ok');
+  }
+  
+  // Handle registration
+  if (data === 'register') {
+    console.log(`Registration requested by user ${userId}`);
+    await handleRegistration(chatId, userId, userName, messageId, env);
+    return new Response('ok');
+  }
+  
+  // Handle other menu actions
+  const userData = await getUserData(userId, env);
+  const userLang = userData?.language || 'en';
+  
+  switch (data) {
+    case 'language':
+      await showLanguageSelection(chatId, env);
+      break;
+  }
+  
   return new Response('ok');
 }
 
-async function handleApi(req: Request, env: Env): Promise<Response> {
-  const url = new URL(req.url);
+async function showLanguageSelection(chatId: number, env: Env): Promise<void> {
+  console.log('showLanguageSelection called for chatId:', chatId);
   
-  // Price endpoint doesn't require user authentication
-  if (url.pathname === '/api/price') {
-    try {
-      const realPrice = await getRealPrice();
-      const ticks = simulateTicks(Date.now(), realPrice.price, 5);
-      const signal = mockAISignal(ticks);
-      
-      return json({
-        current: {
-          price: realPrice.price,
-          source: realPrice.source,
-          timestamp: realPrice.timestamp
-        },
-        signal,
-        ticks: ticks.slice(-5),
-        confidence: Math.random() > 0.5 ? 'High' : 'Medium'
-      });
-    } catch (error) {
-      return json({ error: 'Price fetch failed' }, 500);
-    }
-  }
-
-  // All other endpoints require user authentication
-  const userId = parseInt(url.searchParams.get('user') || '0', 10) || 0;
-  if (!userId) return json({ error: 'user param required' }, 400);
-
-  if (url.pathname === '/api/state') {
-    const state = await getUserState(env, userId);
-    return json(state);
-  }
-
-  if (url.pathname === '/api/deposit' && req.method === 'POST') {
-    const depositBody = await req.json().catch(() => ({ amount: 0 })) as { amount?: number };
-    const amount = depositBody.amount ?? 0;
-    if (!amount || amount <= 0) return json({ error: 'invalid amount' }, 400);
-    const state = await getUserState(env, userId);
-    state.balance = +(state.balance + amount).toFixed(2);
-    await saveUserState(env, state);
-    return json(state);
-  }
-
-  if (url.pathname === '/api/price') {
-    try {
-      const realPrice = await getRealPrice();
-      const ticks = simulateTicks(Date.now(), realPrice.price, 5);
-      const signal = mockAISignal(ticks);
-      
-      return json({
-        current: {
-          price: realPrice.price,
-          source: realPrice.source,
-          timestamp: realPrice.timestamp
-        },
-        signal,
-        ticks: ticks.slice(-5),
-        confidence: Math.random() > 0.5 ? 'High' : 'Medium'
-      });
-    } catch (error) {
-      return json({ error: 'Price fetch failed' }, 500);
-    }
-  }
-
-  if (url.pathname === '/api/price-stream') {
-    // Server-sent events for real-time price updates
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          const sendPrice = async () => {
-            try {
-              const realPrice = await getRealPrice();
-              const data = `data: ${JSON.stringify({
-                price: realPrice.price,
-                source: realPrice.source,
-                timestamp: Date.now()
-              })}\n\n`;
-              controller.enqueue(new TextEncoder().encode(data));
-            } catch (error) {
-              console.error('Stream error:', error);
-            }
-          };
-          
-          // Send initial price
-          sendPrice();
-          
-          // Send price updates every 3 seconds
-          const interval = setInterval(sendPrice, 3000);
-          
-          // Clean up after 5 minutes
-          setTimeout(() => {
-            clearInterval(interval);
-            controller.close();
-          }, 300000);
-        }
-      }),
-      {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': 'Cache-Control'
-        }
+  try {
+    await sendTelegram(env, 'sendMessage', {
+      chat_id: chatId,
+      text: '🌍 **Welcome to TradeX Pro!**\\n\\nPlease select your preferred language:',
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🇺🇸 English', callback_data: 'lang_en' },
+            { text: '🇪🇸 Español', callback_data: 'lang_es' }
+          ],
+          [
+            { text: '🇫🇷 Français', callback_data: 'lang_fr' },
+            { text: '🇩🇪 Deutsch', callback_data: 'lang_de' }
+          ]
+        ]
       }
-    );
-    return response;
-  }
-
-  if (url.pathname === '/api/trade' && req.method === 'POST') {
-    const body = await req.json().catch(() => ({})) as { amount?: number; direction?: string };
-    const amount = Number(body.amount ?? 0) || 0;
-    const direction = body.direction || 'BUY';
-    
-    if (amount <= 0) return json({ error: 'invalid amount' }, 400);
-    const state = await getUserState(env, userId);
-    if (amount > state.balance) return json({ error: 'insufficient balance' }, 400);
-    
-    try {
-      const seed = (Date.now() / 1000 | 0) + userId;
-      const result = await runRealTrade(seed, amount);
-      
-      const trade = {
-        id: crypto.randomUUID(),
-        ts: Date.now(),
-        amount,
-        direction: result.direction,
-        entryPrice: result.entryPrice,
-        exitPrice: result.exitPrice,
-        profit: result.profit,
-        realPrice: result.realPrice,
-        priceSource: result.priceSource
-      };
-      
-      state.balance = +(state.balance + result.profit).toFixed(2);
-      await appendTrade(env, userId, trade);
-      await saveUserState(env, state);
-      
-      return json({ 
-        trade, 
-        ticks: result.ticks,
-        newBalance: state.balance,
-        realPriceData: {
-          price: result.realPrice,
-          source: result.priceSource
-        }
-      });
-    } catch (error) {
-      console.error('Trade execution error:', error);
-      return json({ error: 'Trade execution failed' }, 500);
-    }
-  }
-
-  if (url.pathname === '/api/stats') {
-    const state = await getUserState(env, userId);
-    const stats = calculateUserStats(state.trades);
-    const portfolio = calculatePortfolioMetrics(state.trades, 10000);
-    const achievements = checkAchievements(stats, state.achievements || []);
-    
-    return json({
-      stats,
-      portfolio,
-      availableAchievements: ACHIEVEMENTS,
-      unlockedAchievements: state.achievements || [],
-      newAchievements: achievements
+    });
+    console.log('Language selection message sent');
+  } catch (error) {
+    console.error('Error in showLanguageSelection:', error);
+    // Send a simple fallback message
+    await sendTelegram(env, 'sendMessage', {
+      chat_id: chatId,
+      text: '🌍 Welcome to TradeX Pro! Bot is starting up...'
     });
   }
+}
 
-  if (url.pathname === '/api/achievements' && req.method === 'POST') {
-    const body = await req.json().catch(() => ({})) as { achievementId?: string };
-    const achievementId = body.achievementId;
-    
-    if (!achievementId) return json({ error: 'Missing achievement ID' }, 400);
-    
-    const state = await getUserState(env, userId);
-    const stats = calculateUserStats(state.trades);
-    const newAchievements = checkAchievements(stats, state.achievements || []);
-    
-    const achievement = newAchievements.find(a => a.id === achievementId);
-    if (!achievement) return json({ error: 'Achievement not available' }, 400);
-    
-    // Add achievement and reward
-    state.achievements = state.achievements || [];
-    state.achievements.push(achievementId);
-    state.balance = +(state.balance + achievement.reward).toFixed(2);
-    
-    await saveUserState(env, state);
-    
-    return json({
-      achievement,
-      newBalance: state.balance,
-      message: `Congratulations! You earned $${achievement.reward}!`
-    });
-  }
-
-  if (url.pathname === '/api/leaderboard') {
-    // For demo purposes, generate sample leaderboard
-    const sampleLeaderboard = [
-      { userId: 1, username: 'CryptoKing', totalProfit: 5420.50, winRate: 0.78, totalTrades: 89, rank: 1 },
-      { userId: 2, username: 'TradeQueen', totalProfit: 4890.25, winRate: 0.72, totalTrades: 156, rank: 2 },
-      { userId: 3, username: 'AITrader', totalProfit: 4320.75, winRate: 0.69, totalTrades: 203, rank: 3 },
-      { userId: userId, username: 'You', totalProfit: calculateUserStats((await getUserState(env, userId)).trades).totalProfit, winRate: 0.65, totalTrades: (await getUserState(env, userId)).trades.length, rank: 4 }
-    ];
-    
-    return json({ leaderboard: sampleLeaderboard });
-  }
-
-  // User management endpoints
-  if (url.pathname.startsWith('/api/user/')) {
-    const userIdFromPath = parseInt(url.pathname.split('/')[3], 10);
-    
-    if (req.method === 'GET') {
-      // Get user data
-      try {
-        const userData = await env.TRADING_KV.get(`user_${userIdFromPath}`);
-        if (!userData) {
-          return json({ error: 'User not found' }, 404);
-        }
-        return json(JSON.parse(userData));
-      } catch (error) {
-        return json({ error: 'Failed to load user data' }, 500);
-      }
-    }
-    
-    if (req.method === 'PUT') {
-      // Update user data
-      try {
-        const userData = await req.json();
-        await env.TRADING_KV.put(`user_${userIdFromPath}`, JSON.stringify(userData));
-        return json({ success: true });
-      } catch (error) {
-        return json({ error: 'Failed to save user data' }, 500);
-      }
-    }
-  }
+async function handleLanguageSelection(chatId: number, userId: number, langCode: string, userName: string, messageId: number, env: Env): Promise<void> {
+  // Save language preference
+  const userData = await getUserData(userId, env) || {};
+  userData.language = langCode;
+  userData.telegramData = { id: userId, first_name: userName };
   
-  if (url.pathname === '/api/user' && req.method === 'POST') {
-    // Create new user
-    try {
-      const userData = await req.json() as any;
-      const userId = userData.id;
-      
-      // Check if user already exists
-      const existingUser = await env.TRADING_KV.get(`user_${userId}`);
-      if (existingUser) {
-        return json({ error: 'User already exists' }, 409);
+  await saveUserData(userId, userData, env);
+  
+  const texts = getTexts(langCode);
+  
+  // Show language confirmation and registration if new user
+  if (!userData.registered) {
+    const welcomeText = texts.welcome_register.replace('{}', userName);
+    
+    await sendTelegram(env, 'editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text: welcomeText,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: texts.register_button, callback_data: 'register' }
+        ]]
       }
-      
-      // Create new user record
-      await env.TRADING_KV.put(`user_${userId}`, JSON.stringify(userData));
-      
-      return json({ success: true, userId });
-    } catch (error) {
-      return json({ error: 'Failed to create user' }, 500);
-    }
+    });
+  } else {
+    await sendTelegram(env, 'sendMessage', {
+      chat_id: chatId,
+      text: texts.language_selected
+    });
+    await showMainMenu(chatId, userId, userData, env);
   }
-
-  return json({ error: 'unknown endpoint' }, 404);
 }
 
-function json(data: any, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-}
-
-async function sendTelegram(env: Env, method: string, payload: any) {
-  const token = env.TELEGRAM_BOT_TOKEN;
-  // In demo we just pretend success if no real token
-  if (!token || token === 'dummy') return { ok: true, mocked: true };
-  const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+async function handleRegistration(chatId: number, userId: number, userName: string, messageId: number, env: Env): Promise<void> {
+  const userData = await getUserData(userId, env) || {};
+  const userLang = userData.language || 'en';
+  const texts = getTexts(userLang);
+  
+  // Register user with $10 gift
+  userData.id = userId;
+  userData.registered = true;
+  userData.balance = 10;
+  userData.transactions = [];
+  userData.onboardingCompleted = true;
+  userData.userName = userName;
+  userData.createdAt = new Date().toISOString();
+  
+  await saveUserData(userId, userData, env);
+  
+  await sendTelegram(env, 'editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text: texts.register_success,
+    parse_mode: 'Markdown'
   });
-  return resp.json();
+  
+  // Show main menu
+  setTimeout(() => {
+    showMainMenu(chatId, userId, userData, env);
+  }, 2000);
+}
+
+async function showMainMenu(chatId: number, userId: number, userData: any, env: Env): Promise<void> {
+  const userLang = userData?.language || 'en';
+  const texts = getTexts(userLang);
+  const userName = userData?.userName || userData?.telegramData?.first_name || 'User';
+  
+  // Calculate stats
+  const transactions = userData?.transactions || [];
+  const totalTrades = transactions.length;
+  const wins = transactions.filter((tx: any) => tx.profit > 0).length;
+  const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+  
+  const welcomeText = texts.welcome_existing
+    .replace('{}', userName)
+    .replace('{:.2f}', (userData?.balance || 0).toFixed(2))
+    .replace('{}', totalTrades.toString())
+    .replace('{:.1f}', winRate.toFixed(1));
+  
+  const keyboard = [
+    [{ text: texts.trade_button, web_app: { url: `${env.MINIAPP_URL}?lang=${userLang}&user_id=${userId}&from_bot=1` } }],
+    [
+      { text: texts.stats_button || '📊 Stats', callback_data: 'stats' },
+      { text: texts.history_button || '📜 History', callback_data: 'history' }
+    ],
+    [
+      { text: texts.deposit_button || '💰 Deposit', callback_data: 'deposit' },
+      { text: texts.withdraw_button || '💸 Withdraw', callback_data: 'withdraw' }
+    ],
+    [
+      { text: texts.language_button || '🌍 Language', callback_data: 'language' }
+    ]
+  ];
+  
+  await sendTelegram(env, 'sendMessage', {
+    chat_id: chatId,
+    text: welcomeText,
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function getUserData(userId: number, env: Env): Promise<any> {
+  try {
+    const data = await env.TRADING_KV.get(`user:${userId}`);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error('Error getting user data:', error);
+    return null;
+  }
+}
+
+async function saveUserData(userId: number, userData: any, env: Env): Promise<void> {
+  try {
+    await env.TRADING_KV.put(`user:${userId}`, JSON.stringify(userData));
+  } catch (error) {
+    console.error('Error saving user data:', error);
+  }
 }
 
 function serveMiniApp(url: URL, env: Env): Response {
   if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
     return new Response(MINIAPP_HTML(env), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
-  if (url.pathname === '/miniapp/app.js') {
-    return new Response('// JavaScript is now included in HTML', { 
-      headers: { 'Content-Type': 'application/javascript; charset=utf-8' } 
-    });
-  }
   return new Response('Not found', { status: 404 });
 }
 
 function MINIAPP_HTML(env: Env) {
+  const baseUrl = env.BASE_URL || 'https://promotion-trade-bot.tradermindai.workers.dev';
+  
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -368,8 +794,6 @@ function MINIAPP_HTML(env: Env) {
     <title>TradeX Pro - AI Trading Bot</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -383,6 +807,7 @@ function MINIAPP_HTML(env: Env) {
             color: #ffffff;
             font-size: 14px;
             line-height: 1.4;
+            overflow-x: hidden;
         }
         
         .container {
@@ -400,14 +825,35 @@ function MINIAPP_HTML(env: Env) {
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
-        .header h1 {
-            font-size: 1.4rem;
-            margin-bottom: 2px;
+        .nav-tabs {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            margin-bottom: 8px;
+            overflow: hidden;
         }
         
-        .header p {
-            font-size: 0.8rem;
-            opacity: 0.9;
+        .nav-tab {
+            flex: 1;
+            padding: 8px;
+            background: none;
+            border: none;
+            color: #fff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 12px;
+        }
+        
+        .nav-tab.active {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
         }
         
         .balance-card {
@@ -424,7 +870,124 @@ function MINIAPP_HTML(env: Env) {
             font-size: 1.8rem;
             font-weight: bold;
             margin: 5px 0;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .crypto-list {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .crypto-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .crypto-item:last-child {
+            border-bottom: none;
+        }
+        
+        .crypto-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+        }
+        
+        .crypto-info {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .crypto-symbol {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .crypto-name {
+            font-size: 12px;
+            color: #ccc;
+        }
+        
+        .crypto-price {
+            text-align: right;
+        }
+        
+        .price-value {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .price-change {
+            font-size: 12px;
+            margin-top: 2px;
+        }
+        
+        .positive {
+            color: #4CAF50;
+        }
+        
+        .negative {
+            color: #f44336;
+        }
+        
+        .trading-panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        
+        .trade-input-group {
+            margin-bottom: 12px;
+        }
+        
+        .trade-input-group label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: #ccc;
+        }
+        
+        .trade-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            font-size: 14px;
+        }
+        
+        .trade-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        .trade-btn {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+        
+        .buy-btn {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+        
+        .sell-btn {
+            background: linear-gradient(45deg, #f44336, #da190b);
+            color: white;
         }
         
         .wallet-actions {
@@ -456,1420 +1019,653 @@ function MINIAPP_HTML(env: Env) {
         
         .chart-container {
             background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
             border-radius: 12px;
             padding: 12px;
             margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            height: 180px;
+            height: 300px;
         }
         
-        .price-info {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-        
-        .price-card {
+        .positions-list {
             background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 8px;
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
-        .price-value {
-            font-size: 1rem;
-            font-weight: bold;
-            margin: 2px 0;
-        }
-        
-        .price-label {
-            font-size: 0.7rem;
-            opacity: 0.8;
-        }
-        
-        /* EMPHASIZED AI SIGNAL SECTION */
-        .ai-signal {
-            background: linear-gradient(135deg, #FFD700, #FFA500);
-            border: 3px solid #FF6B35;
-            border-radius: 16px;
-            padding: 16px;
-            margin-bottom: 12px;
-            text-align: center;
-            box-shadow: 0 8px 25px rgba(255, 107, 53, 0.4);
-            animation: pulse-glow 2s infinite;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .ai-signal::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: shine 3s infinite;
-        }
-        
-        @keyframes pulse-glow {
-            0%, 100% { box-shadow: 0 8px 25px rgba(255, 107, 53, 0.4); }
-            50% { box-shadow: 0 12px 35px rgba(255, 107, 53, 0.7); }
-        }
-        
-        @keyframes shine {
-            0% { left: -100%; }
-            100% { left: 100%; }
-        }
-        
-        .ai-signal h3 {
-            color: #1a1a1a;
-            font-size: 1.1rem;
-            font-weight: 800;
-            margin-bottom: 8px;
-            text-shadow: 1px 1px 2px rgba(255,255,255,0.5);
-        }
-        
-        .signal-content {
-            color: #2c2c2c;
-            font-weight: 600;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .signal-direction {
-            font-size: 1.3rem;
-            font-weight: 800;
-            margin: 8px 0;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        
-        .signal-confidence {
-            font-size: 0.9rem;
-            margin-top: 4px;
-        }
-            text-align: center;
-        }
-        
-        .signal-indicator {
-            font-size: 2rem;
-            margin: 5px 0;
-        }
-        
-        .signal-buy {
-            color: #4CAF50;
-        }
-        
-        .signal-sell {
-            color: #f44336;
-        }
-        
-        .amount-input {
-            width: 100%;
-            padding: 10px;
-            border: none;
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            font-size: 14px;
-            margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-        
-        .amount-input::placeholder {
-            color: rgba(255, 255, 255, 0.6);
-        }
-        
-        
-        /* EMPHASIZED BUY/SELL BUTTONS */
-        .trading-controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin: 12px 0;
-        }
-        
-        .trade-btn {
-            padding: 16px 20px;
-            border: none;
-            border-radius: 16px;
-            font-size: 1.1rem;
-            font-weight: 800;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
-            border: 2px solid transparent;
-        }
-        
-        .buy-btn {
-            background: linear-gradient(135deg, #4CAF50, #45a049, #2E7D32);
-            color: white;
-            border-color: #4CAF50;
-            animation: buy-pulse 2s infinite;
-        }
-        
-        .sell-btn {
-            background: linear-gradient(135deg, #f44336, #da190b, #C62828);
-            color: white;
-            border-color: #f44336;
-            animation: sell-pulse 2s infinite;
-        }
-        
-        .trade-btn::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            animation: button-shine 3s infinite;
-        }
-        
-        .trade-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.4);
-        }
-        
-        .trade-btn:active {
-            transform: translateY(0);
-        }
-        
-        @keyframes buy-pulse {
-            0%, 100% { box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4); }
-            50% { box-shadow: 0 10px 30px rgba(76, 175, 80, 0.7); }
-        }
-        
-        @keyframes sell-pulse {
-            0%, 100% { box-shadow: 0 6px 20px rgba(244, 67, 54, 0.4); }
-            50% { box-shadow: 0 10px 30px rgba(244, 67, 54, 0.7); }
-        }
-        
-        @keyframes button-shine {
-            0% { left: -100%; }
-            100% { left: 100%; }
-        }
-        
-        .trade-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            animation: none;
-        }
-        
-        /* EMPHASIZED TRADE PROGRESS MODAL */
-        .trade-progress {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            z-index: 1000;
-            backdrop-filter: blur(10px);
-        }
-        
-        .progress-modal {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 20px;
-            padding: 30px;
-            width: 90%;
-            max-width: 350px;
-            text-align: center;
-            border: 3px solid #FFD700;
-            box-shadow: 0 20px 60px rgba(255, 215, 0, 0.4);
-            animation: modal-appear 0.5s ease;
-        }
-        
-        @keyframes modal-appear {
-            0% { 
-                opacity: 0;
-                transform: translate(-50%, -50%) scale(0.8);
-            }
-            100% { 
-                opacity: 1;
-                transform: translate(-50%, -50%) scale(1);
-            }
-        }
-        
-        .progress-title {
-            font-size: 1.4rem;
-            font-weight: 800;
-            margin-bottom: 20px;
-            color: #FFD700;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        
-        .progress-timer {
-            font-size: 3rem;
-            font-weight: 900;
-            margin: 20px 0;
-            color: #FFD700;
-            text-shadow: 3px 3px 6px rgba(0,0,0,0.7);
-            animation: timer-pulse 1s infinite;
-        }
-        
-        @keyframes timer-pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        .live-pnl {
-            font-size: 2rem;
-            font-weight: 800;
-            margin: 15px 0;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        
-        .profit {
-            color: #4CAF50;
-        }
-        
-        .loss {
-            color: #ff4444;
-        }
-        
-        .trade-header {
-            font-size: 1rem;
-            font-weight: bold;
-            margin-bottom: 8px;
-            opacity: 0.9;
-        }
-        
-        .trade-details {
-            margin: 10px 0;
-        }
-        
-        .trade-info-row {
+        .position-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
-            padding: 5px 0;
-        }
-        
-        .trade-direction {
-            font-weight: bold;
-            padding: 3px 8px;
-            border-radius: 6px;
-            font-size: 0.8rem;
-        }
-        
-        .trade-direction.buy {
-            background: rgba(76, 175, 80, 0.3);
-            color: #4CAF50;
-        }
-        
-        .trade-direction.sell {
-            background: rgba(244, 67, 54, 0.3);
-            color: #f44336;
-        }
-        
-        .trade-amount {
-            font-weight: bold;
-            font-size: 0.9rem;
-        }
-        
-        .price-movement {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin: 8px 0;
             padding: 8px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
         
-        .price-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.8rem;
-            padding: 2px 0;
+        .position-item:last-child {
+            border-bottom: none;
         }
         
-        .price-row span:first-child {
-            opacity: 0.8;
-        }
-        
-        .price-row span:last-child {
-            font-weight: bold;
-        }
-        
-        .profit-display {
-            margin-top: 10px;
-        }
-        
-        .live-percent {
-            font-size: 0.9rem;
-            font-weight: bold;
-            margin-top: 3px;
-            opacity: 0.9;
-        }
-        
-        .progress-timer {
-            font-size: 2rem;
-            font-weight: bold;
-            margin: 10px 0;
-            color: #FFD700;
-        }
-        
-        .live-pnl {
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin: 8px 0;
-        }
-        
-        .profit {
-            color: #4CAF50;
-        }
-        
-        .loss {
-            color: #f44336;
-        }
-        
-        .trade-result {
-            display: none;
-            background: rgba(255, 255, 255, 0.15);
-            backdrop-filter: blur(10px);
+        .trade-history {
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 12px;
-            padding: 15px;
-            text-align: center;
-            margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 8px;
+            max-height: 300px;
+            overflow-y: auto;
         }
         
-        .result-details {
-            margin: 15px 0;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 10px;
-        }
-        
-        .profit-row, .balance-row {
+        .history-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin: 8px 0;
-            padding: 3px 0;
+            padding: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 12px;
         }
         
-        .profit-row span, .balance-row span {
-            font-size: 0.9rem;
-            opacity: 0.8;
-        }
-        
-        .final-balance {
-            font-size: 1.1rem;
-            font-weight: bold;
-            color: #4CAF50;
-        }
-        
-        .result-icon {
-            font-size: 2.5rem;
-            margin: 10px 0;
-        }
-        
-        .win-icon {
-            color: #4CAF50;
-        }
-        
-        .lose-icon {
-            color: #f44336;
-        }
-        
-        .statistics {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 8px;
-            text-align: center;
-        }
-        
-        .stat-item {
-            padding: 5px;
-        }
-        
-        .stat-value {
-            font-size: 1rem;
-            font-weight: bold;
-            margin-bottom: 2px;
-        }
-        
-        .stat-label {
-            font-size: 0.7rem;
-            opacity: 0.8;
-        }
-        
-        .footer {
-            text-align: center;
-            padding: 10px;
-            opacity: 0.8;
-            font-size: 0.7rem;
+        .history-item:last-child {
+            border-bottom: none;
         }
         
         .loading {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
+            text-align: center;
+            padding: 20px;
+            color: #ccc;
         }
         
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        .hidden {
+            display: none;
         }
-        
-        /* Compact mode for very small screens */
-        @media (max-height: 600px) {
-            .container {
-                padding: 5px;
-            }
-            
-            .chart-container {
-                height: 120px;
-            }
-            
-            .balance-amount {
-                font-size: 1.5rem;
-            }
-            
-            .signal-indicator {
-                font-size: 1.5rem;
-            }
-            
-            .statistics {
-                display: none;
-            }
-        }
-    </style>
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 <span id="appTitle">TradeX Pro</span></h1>
-            <p><span id="appSubtitle">AI-Powered Trading Bot</span></p>
+            <h1>🚀 TradeX Pro</h1>
+            <p>AI-Powered Trading Bot</p>
+            <div style="font-size: 0.8rem; color: #ccc;" id="userType">Loading...</div>
         </div>
         
-        <div class="balance-card">
-            <div class="price-label" id="balanceLabel">Your Balance</div>
-            <div class="balance-amount" id="balance">$10,000.00</div>
-            <div class="wallet-actions">
-                <button class="wallet-btn deposit-btn" onclick="showDeposit()" id="depositBtn">
-                    💰 <span id="depositText">Deposit</span>
-                </button>
-                <button class="wallet-btn withdraw-btn" onclick="showWithdraw()" id="withdrawBtn">
-                    💸 <span id="withdrawText">Withdraw</span>
-                </button>
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('trade')">📈 Trade</button>
+            <button class="nav-tab" onclick="showTab('portfolio')">💼 Portfolio</button>
+            <button class="nav-tab" onclick="showTab('wallet')">💰 Wallet</button>
+            <button class="nav-tab" onclick="showTab('history')">📜 History</button>
+        </div>
+        
+        <!-- Trade Tab -->
+        <div id="trade-tab" class="tab-content active">
+            <div class="balance-card">
+                <div>Your Balance</div>
+                <div class="balance-amount" id="balance">$10.00</div>
             </div>
-        </div>
-        
-        <div class="chart-container">
-            <canvas id="priceChart"></canvas>
-        </div>
-        
-        <div class="price-info">
-            <div class="price-card">
-                <div class="price-label" id="currentPriceLabel">Current Price</div>
-                <div class="price-value" id="currentPrice">Loading...</div>
-                <div class="price-label" id="priceSource">Real-time</div>
+            
+            <div class="crypto-list" id="crypto-list">
+                <div class="loading">Loading prices...</div>
             </div>
-            <div class="price-card">
-                <div class="price-label" id="changeLabel">24h Change</div>
-                <div class="price-value" id="priceChange">+2.45%</div>
-                <div class="price-label">BTC/USD</div>
-            </div>
-            <div class="price-card">
-                <div class="price-label" id="volumeLabel">Volume</div>
-                <div class="price-value" id="volume24h">$2.1B</div>
-                <div class="price-label">24h</div>
-            </div>
-        </div>
-        
-        <!-- EMPHASIZED AI SIGNAL SECTION -->
-        <div class="ai-signal">
-            <h3 id="aiTitle">🤖 AI Recommendation</h3>
-            <div class="signal-content">
-                <div class="signal-direction" id="signalDirection">ANALYZING...</div>
-                <div id="signalText">Market analysis in progress</div>
-                <div class="signal-confidence" id="signalConfidence">Confidence: --</div>
-            </div>
-        </div>
-        
-        <input type="number" class="amount-input" id="tradeAmount" 
-               placeholder="Enter amount ($100 - $1000)" 
-               min="100" max="1000" value="100">
-        
-        <!-- EMPHASIZED BUY/SELL BUTTONS -->
-        <div class="trading-controls">
-            <button class="trade-btn buy-btn" onclick="executeTrade('BUY')" id="buyBtn">
-                📈 <span id="buyText">BUY</span>
-            </button>
-            <button class="trade-btn sell-btn" onclick="executeTrade('SELL')" id="sellBtn">
-                📉 <span id="sellText">SELL</span>
-            </button>
-        </div>
-        
-        <!-- EMPHASIZED TRADE PROGRESS MODAL -->
-        <div class="trade-progress" id="tradeProgress">
-            <div class="progress-modal">
-                <div class="progress-title" id="progressTitle">Trade in Progress</div>
-                <div class="progress-timer" id="timer">20</div>
-                <div class="trade-details">
-                    <div class="trade-info-row">
-                        <span class="trade-direction" id="tradeDirection">BUY</span>
-                        <span class="trade-amount" id="tradeAmountDisplay">$0</span>
-                    </div>
-                    <div class="price-movement">
-                        <div class="price-row">
-                            <span id="entryLabel">Entry:</span>
-                            <span id="entryPrice">$0</span>
-                        </div>
-                        <div class="price-row">
-                            <span id="currentLabel">Current:</span>
-                            <span id="currentPriceModal">$0</span>
-                        </div>
-                    </div>
-                    <div class="profit-display">
-                        <div class="live-pnl" id="livePnl">$0.00</div>
-                        <div class="live-percent" id="livePercent">0.00%</div>
-                    </div>
+            
+            <div class="trading-panel" id="trading-panel" style="display: none;">
+                <h3 id="selected-crypto">Select a cryptocurrency to trade</h3>
+                <div class="chart-container">
+                    <canvas id="price-chart"></canvas>
                 </div>
-                <canvas id="liveChart" style="max-height: 120px; margin-top: 15px;"></canvas>
-            </div>
-        </div>
-        
-        <div class="trade-result" id="tradeResult">
-            <div class="result-icon" id="resultIcon">🎉</div>
-            <div id="resultText">Congratulations!</div>
-            <div class="result-details">
-                <div class="profit-row">
-                    <span>Profit:</span>
-                    <div class="live-pnl" id="finalPnl">+$25.50</div>
+                <div class="trade-input-group">
+                    <label for="trade-amount">Amount ($)</label>
+                    <input type="number" id="trade-amount" class="trade-input" placeholder="Enter amount" min="1" step="0.01">
                 </div>
-                <div class="profit-row">
-                    <span>Return:</span>
-                    <div class="live-percent" id="profitPercent">+2.55%</div>
-                </div>
-                <div class="balance-row">
-                    <span>New Balance:</span>
-                    <div class="final-balance" id="finalBalance">$10,025.50</div>
-                </div>
-            </div>
-            <button class="trade-btn buy-btn" onclick="resetTrade()" style="margin-top: 15px; width: 100%;">
-                Trade Again
-            </button>
-        </div>
-        
-        <div class="statistics">
-            <h3 style="text-align: center; margin-bottom: 15px;">📊 Your Stats</h3>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-value" id="totalTrades">0</div>
-                    <div class="stat-label">Total Trades</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="winRate">0%</div>
-                    <div class="stat-label">Win Rate</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value" id="totalProfit">$0</div>
-                    <div class="stat-label">Total Profit</div>
+                <div class="trade-buttons">
+                    <button class="trade-btn buy-btn" onclick="executeTrade('buy')">🚀 Buy</button>
+                    <button class="trade-btn sell-btn" onclick="executeTrade('sell')">📉 Sell</button>
                 </div>
             </div>
         </div>
         
-        <div class="footer">
-            <p>Powered by AI • Real-time data from multiple sources</p>
-            <p>⚡ Built with Cloudflare Workers</p>
+        <!-- Portfolio Tab -->
+        <div id="portfolio-tab" class="tab-content">
+            <div class="balance-card">
+                <div>Portfolio Value</div>
+                <div class="balance-amount" id="portfolio-value">$10.00</div>
+            </div>
+            
+            <div class="positions-list" id="positions-list">
+                <div class="loading">No open positions</div>
+            </div>
+        </div>
+        
+        <!-- Wallet Tab -->
+        <div id="wallet-tab" class="tab-content">
+            <div class="balance-card">
+                <div>Your Balance</div>
+                <div class="balance-amount" id="wallet-balance">$10.00</div>
+                <div class="wallet-actions">
+                    <button class="wallet-btn deposit-btn" onclick="showDeposit()">💰 Deposit</button>
+                    <button class="wallet-btn withdraw-btn" onclick="showWithdraw()">💸 Withdraw</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- History Tab -->
+        <div id="history-tab" class="tab-content">
+            <div class="trade-history" id="trade-history">
+                <div class="loading">No trade history</div>
+            </div>
         </div>
     </div>
 
     <script>
-        // Multilingual Support System
-        const LANGUAGES = {
-            en: {
-                name: 'English',
-                flag: '🇺🇸',
-                app_title: 'TradeX Pro',
-                app_subtitle: 'AI-Powered Trading Bot',
-                balance_label: 'Your Balance',
-                deposit: 'Deposit',
-                withdraw: 'Withdraw',
-                current_price: 'Current Price',
-                change_24h: '24h Change',
-                volume: 'Volume',
-                ai_title: '🤖 AI Recommendation',
-                buy: 'BUY',
-                sell: 'SELL',
-                trade_progress: 'Trade in Progress',
-                entry: 'Entry:',
-                current: 'Current:',
-                analyzing: 'ANALYZING...',
-                market_analysis: 'Market analysis in progress',
-                confidence: 'Confidence:',
-                amount_placeholder: 'Enter amount ($100 - $1000)',
-                transaction_history: 'Transaction History',
-                no_transactions: 'No transactions yet. Start trading!'
-            },
-            es: {
-                name: 'Español',
-                flag: '🇪🇸',
-                app_title: 'TradeX Pro',
-                app_subtitle: 'Bot de Trading con IA',
-                balance_label: 'Tu Saldo',
-                deposit: 'Depositar',
-                withdraw: 'Retirar',
-                current_price: 'Precio Actual',
-                change_24h: 'Cambio 24h',
-                volume: 'Volumen',
-                ai_title: '🤖 Recomendación IA',
-                buy: 'COMPRAR',
-                sell: 'VENDER',
-                trade_progress: 'Operación en Progreso',
-                entry: 'Entrada:',
-                current: 'Actual:',
-                analyzing: 'ANALIZANDO...',
-                market_analysis: 'Análisis de mercado en progreso',
-                confidence: 'Confianza:',
-                amount_placeholder: 'Ingresa cantidad ($100 - $1000)',
-                transaction_history: 'Historial de Transacciones',
-                no_transactions: '¡Sin transacciones aún. Comienza a operar!'
-            },
-            fa: {
-                name: 'فارسی',
-                flag: '🇮🇷',
-                app_title: 'TradeX Pro',
-                app_subtitle: 'ربات معاملاتی هوش مصنوعی',
-                balance_label: 'موجودی شما',
-                deposit: 'واریز',
-                withdraw: 'برداشت',
-                current_price: 'قیمت فعلی',
-                change_24h: 'تغییر ۲۴ ساعته',
-                volume: 'حجم',
-                ai_title: '🤖 پیشنهاد هوش مصنوعی',
-                buy: 'خرید',
-                sell: 'فروش',
-                trade_progress: 'معامله در حال انجام',
-                entry: 'ورودی:',
-                current: 'فعلی:',
-                analyzing: 'در حال تحلیل...',
-                market_analysis: 'تحلیل بازار در حال انجام',
-                confidence: 'اطمینان:',
-                amount_placeholder: 'مقدار را وارد کنید ($100 - $1000)',
-                transaction_history: 'تاریخچه تراکنش‌ها',
-                no_transactions: 'هنوز تراکنشی ندارید. شروع به معامله کنید!'
-            },
-            fr: {
-                name: 'Français',
-                flag: '🇫🇷',
-                app_title: 'TradeX Pro',
-                app_subtitle: 'Bot de Trading IA',
-                balance_label: 'Votre Solde',
-                deposit: 'Dépôt',
-                withdraw: 'Retrait',
-                current_price: 'Prix Actuel',
-                change_24h: 'Change 24h',
-                volume: 'Volume',
-                ai_title: '🤖 Recommandation IA',
-                buy: 'ACHETER',
-                sell: 'VENDRE',
-                trade_progress: 'Trade en Cours',
-                entry: 'Entrée:',
-                current: 'Actuel:',
-                analyzing: 'ANALYSE...',
-                market_analysis: 'Analyse du marché en cours',
-                confidence: 'Confiance:',
-                amount_placeholder: 'Entrez le montant ($100 - $1000)',
-                transaction_history: 'Historique des Transactions',
-                no_transactions: 'Aucune transaction encore. Commencez à trader!'
-            },
-            de: {
-                name: 'Deutsch',
-                flag: '🇩🇪',
-                app_title: 'TradeX Pro',
-                app_subtitle: 'KI-Trading Bot',
-                balance_label: 'Ihr Guthaben',
-                deposit: 'Einzahlung',
-                withdraw: 'Auszahlung',
-                current_price: 'Aktueller Preis',
-                change_24h: '24h Änderung',
-                volume: 'Volumen',
-                ai_title: '🤖 KI-Empfehlung',
-                buy: 'KAUFEN',
-                sell: 'VERKAUFEN',
-                trade_progress: 'Handel läuft',
-                entry: 'Einstieg:',
-                current: 'Aktuell:',
-                analyzing: 'ANALYSIERE...',
-                market_analysis: 'Marktanalyse läuft',
-                confidence: 'Vertrauen:',
-                amount_placeholder: 'Betrag eingeben ($100 - $1000)',
-                transaction_history: 'Transaktionshistorie',
-                no_transactions: 'Noch keine Transaktionen. Beginnen Sie zu handeln!'
-            }
-        };
-
-        // Get URL parameters for language and user
-        const urlParams = new URLSearchParams(window.location.search);
-        const userLang = urlParams.get('lang') || 'en';
-        const urlUserId = urlParams.get('user_id');
-
-        // Apply language to UI
-        function applyLanguage(lang) {
-            const texts = LANGUAGES[lang] || LANGUAGES.en;
-            
-            // Update text elements
-            document.getElementById('appTitle').textContent = texts.app_title;
-            document.getElementById('appSubtitle').textContent = texts.app_subtitle;
-            document.getElementById('balanceLabel').textContent = texts.balance_label;
-            document.getElementById('depositText').textContent = texts.deposit;
-            document.getElementById('withdrawText').textContent = texts.withdraw;
-            document.getElementById('currentPriceLabel').textContent = texts.current_price;
-            document.getElementById('changeLabel').textContent = texts.change_24h;
-            document.getElementById('volumeLabel').textContent = texts.volume;
-            document.getElementById('aiTitle').innerHTML = texts.ai_title;
-            document.getElementById('buyText').textContent = texts.buy;
-            document.getElementById('sellText').textContent = texts.sell;
-            document.getElementById('progressTitle').textContent = texts.trade_progress;
-            document.getElementById('entryLabel').textContent = texts.entry;
-            document.getElementById('currentLabel').textContent = texts.current;
-            document.getElementById('signalDirection').textContent = texts.analyzing;
-            document.getElementById('signalText').textContent = texts.market_analysis;
-            document.getElementById('tradeAmount').placeholder = texts.amount_placeholder;
-            
-            // Update signal confidence text
-            const confidenceEl = document.getElementById('signalConfidence');
-            if (confidenceEl.textContent.includes('--')) {
-                confidenceEl.textContent = texts.confidence + ' --';
-            }
-            
-            // Set text direction for RTL languages
-            if (lang === 'fa' || lang === 'ar') {
-                document.body.style.direction = 'rtl';
-                document.body.style.textAlign = 'right';
-            } else {
-                document.body.style.direction = 'ltr';
-                document.body.style.textAlign = 'left';
-            }
-        }
-
-        // Initialize Telegram WebApp
-        const tg = window.Telegram?.WebApp;
-        let telegramUser = null;
-        let userId = urlUserId || 12345; // Use URL param or default
-        let currentTrade = null;
-        let priceChart = null;
-        let liveChart = null;
-        let userData = { balance: 10000, trades: [], stats: { total: 0, wins: 0, profit: 0 } };
-
-        // Initialize Telegram WebApp
-        function initTelegramAuth() {
-            if (tg) {
-                tg.ready();
-                tg.expand();
-                
-                // Get user data from Telegram
-                if (tg.initDataUnsafe?.user) {
-                    telegramUser = tg.initDataUnsafe.user;
-                    userId = telegramUser.id;
-                    
-                    // Update header with user info
-                    updateUserDisplay();
-                    
-                    // Load user data from server
-                    loadUserData();
+        console.log('🚀 MiniApp JavaScript starting...');
+        
+        // Global state
+        var currentUser = null;
+        var cryptoPrices = [];
+        var selectedCrypto = null;
+        var userBalance = 10.00;
+        var userPositions = [];
+        var userHistory = [];
+        var BASE_URL = '${baseUrl}';
+        
+        // Get URL parameters
+        var urlParams = new URLSearchParams(window.location.search);
+        var userLang = urlParams.get('lang') || 'en';
+        var urlUserId = urlParams.get('user_id');
+        var fromBot = urlParams.get('from_bot') === '1';
+        
+        console.log('URL Parameters:', { userLang: userLang, urlUserId: urlUserId, fromBot: fromBot });
+        
+        // Initialize app
+        function initApp() {
+            // Set user info
+            var debugEl = document.getElementById('userType');
+            if (debugEl) {
+                if (urlUserId && fromBot) {
+                    debugEl.textContent = '✅ Authenticated via Bot (ID: ' + urlUserId + ')';
+                    debugEl.style.color = '#4CAF50';
+                    currentUser = urlUserId;
+                } else if (urlUserId) {
+                    debugEl.textContent = '⚠️ External Access (ID: ' + urlUserId + ')';
+                    debugEl.style.color = '#FFA500';
+                    currentUser = urlUserId;
                 } else {
-                    // Running outside Telegram - use demo mode
-                    console.log('Running in demo mode outside Telegram');
+                    debugEl.textContent = '👤 Demo Mode';
+                    debugEl.style.color = '#888';
+                    currentUser = 'demo';
                 }
-                
-                // Set main button for quick actions
-                tg.MainButton.setText('💰 Quick Deposit $100');
-                tg.MainButton.onClick(() => quickDeposit(100));
-                tg.MainButton.show();
             }
+            
+            // Load prices
+            loadPrices();
+            
+            // Load user data
+            loadUserData();
+            
+            console.log('MiniApp initialized successfully');
         }
         
-        // Update UI with user information
-        function updateUserDisplay() {
-            if (telegramUser) {
-                const headerEl = document.querySelector('.header h1');
-                const userInfoEl = document.querySelector('.header p');
-                
-                headerEl.textContent = '🚀 Welcome ' + (telegramUser.first_name || 'Trader');
-                userInfoEl.textContent = 'AI Trading Bot • @' + (telegramUser.username || 'User');
-            }
-        }
-        
-        // Load user-specific data
-        async function loadUserData() {
-            if (!userId || userId === 12345) return;
-            
-            try {
-                const response = await fetch('/api/user/' + userId);
-                if (response.ok) {
-                    const serverUserData = await response.json();
-                    userData = { ...userData, ...serverUserData };
-                    
-                    // Update balance display
-                    document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
-                    updateStats();
-                } else {
-                    // New user - create account
-                    await createUserAccount();
-                }
-            } catch (error) {
-                console.error('Error loading user data:', error);
-            }
-        }
-        
-        // Create new user account
-        async function createUserAccount() {
-            if (!telegramUser) return;
-            
-            const newUserData = {
-                id: userId,
-                telegramData: telegramUser,
-                balance: 10000, // Starting balance
-                trades: [],
-                stats: { total: 0, wins: 0, profit: 0 },
-                createdAt: new Date().toISOString()
-            };
-            
-            try {
-                const response = await fetch('/api/user', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newUserData)
+        // Load cryptocurrency prices
+        function loadPrices() {
+            fetch(BASE_URL + '/api/prices')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    cryptoPrices = data;
+                    displayCryptoPrices();
+                })
+                .catch(function(error) {
+                    console.error('Error loading prices:', error);
+                    displayCryptoPrices(); // Show with empty data
                 });
+        }
+        
+        // Display crypto prices
+        function displayCryptoPrices() {
+            var listEl = document.getElementById('crypto-list');
+            if (!listEl) return;
+            
+            if (cryptoPrices.length === 0) {
+                listEl.innerHTML = '<div class="loading">Unable to load prices</div>';
+                return;
+            }
+            
+            var html = '';
+            for (var i = 0; i < cryptoPrices.length; i++) {
+                var crypto = cryptoPrices[i];
+                var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
+                var changeSign = crypto.change >= 0 ? '+' : '';
                 
-                if (response.ok) {
-                    userData = newUserData;
-                    console.log('User account created successfully');
+                html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
+                html += '  <div class="crypto-info">';
+                html += '    <div class="crypto-symbol">' + crypto.symbol + '</div>';
+                html += '    <div class="crypto-name">' + crypto.name + '</div>';
+                html += '  </div>';
+                html += '  <div class="crypto-price">';
+                html += '    <div class="price-value">$' + crypto.price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6}) + '</div>';
+                html += '    <div class="price-change ' + changeClass + '">';
+                html += '      ' + changeSign + crypto.change.toFixed(2) + '%';
+                html += '    </div>';
+                html += '  </div>';
+                html += '</div>';
+            }
+            
+            listEl.innerHTML = html;
+        }
+        
+        // Select crypto for trading
+        function selectCrypto(symbol) {
+            selectedCrypto = null;
+            for (var i = 0; i < cryptoPrices.length; i++) {
+                if (cryptoPrices[i].symbol === symbol) {
+                    selectedCrypto = cryptoPrices[i];
+                    break;
                 }
-            } catch (error) {
-                console.error('Error creating user account:', error);
             }
+            
+            if (!selectedCrypto) return;
+            
+            document.getElementById('selected-crypto').textContent = 'Trading ' + selectedCrypto.symbol + ' - $' + selectedCrypto.price.toLocaleString();
+            document.getElementById('trading-panel').style.display = 'block';
+            
+            // Create simple price chart
+            createPriceChart();
         }
         
-        // Save user data to server
-        async function saveUserData() {
-            if (!userId || userId === 12345) return;
+        // Create price chart
+        function createPriceChart() {
+            var ctx = document.getElementById('price-chart');
+            if (!ctx || !selectedCrypto) return;
             
-            try {
-                await fetch('/api/user/' + userId, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(userData)
-                });
-            } catch (error) {
-                console.error('Error saving user data:', error);
-            }
-        }
-        
-        // Quick deposit function
-        function quickDeposit(amount) {
-            userData.balance += amount;
-            document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
-            saveUserData();
+            // Generate mock price data for demo
+            var labels = [];
+            var data = [];
+            var basePrice = selectedCrypto.price;
             
-            if (tg) {
-                tg.showAlert('Successfully deposited $' + amount + '!');
+            for (var i = 23; i >= 0; i--) {
+                labels.push(i + 'h');
+                // Generate random price around current price
+                var variation = (Math.random() - 0.5) * 0.1; // ±5% variation
+                data.push(basePrice * (1 + variation));
             }
-        }
-
-        // Initialize charts with trade marker support
-        async function initCharts() {
-            const chartCtx = document.getElementById('priceChart').getContext('2d');
-            priceChart = new Chart(chartCtx, {
+            
+            new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: [],
+                    labels: labels,
                     datasets: [{
-                        label: 'BTC/USD',
-                        data: [],
+                        label: selectedCrypto.symbol + ' Price',
+                        data: data,
                         borderColor: '#4CAF50',
                         backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                        borderWidth: 2,
-                        tension: 0.4,
-                        fill: true
-                    }, {
-                        label: 'Trade Entry',
-                        data: [],
-                        borderColor: '#FFD700',
-                        backgroundColor: '#FFD700',
-                        pointRadius: 8,
-                        pointHoverRadius: 10,
-                        showLine: false,
-                        pointStyle: 'triangle'
-                    }, {
-                        label: 'Trade Exit',
-                        data: [],
-                        borderColor: '#FF6B6B',
-                        backgroundColor: '#FF6B6B',
-                        pointRadius: 8,
-                        pointHoverRadius: 10,
-                        showLine: false,
-                        pointStyle: 'rect'
+                        tension: 0.1
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    if (context.datasetIndex === 1) {
-                                        return 'Entry: $' + context.parsed.y.toLocaleString();
-                                    } else if (context.datasetIndex === 2) {
-                                        return 'Exit: $' + context.parsed.y.toLocaleString();
-                                    }
-                                    return 'Price: $' + context.parsed.y.toLocaleString();
-                                }
-                            }
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            ticks: { color: '#fff' }
+                        },
+                        x: {
+                            ticks: { color: '#fff' }
                         }
                     },
-                    scales: {
-                        x: { display: false },
-                        y: {
-                            grid: { color: 'rgba(255,255,255,0.1)' },
-                            ticks: { color: 'white' }
+                    plugins: {
+                        legend: {
+                            labels: { color: '#fff' }
                         }
                     }
                 }
             });
         }
         
-        // Add trade markers to chart
-        function addTradeMarker(price, type, time) {
-            if (!priceChart) return;
-            
-            const datasetIndex = type === 'entry' ? 1 : 2;
-            const timeLabel = new Date(time).toLocaleTimeString();
-            
-            // Add marker to chart
-            priceChart.data.datasets[datasetIndex].data.push({
-                x: priceChart.data.labels.length - 1,
-                y: price
-            });
-            
-            priceChart.update('none');
-        }
-
-        // Fetch real price data
-        async function fetchRealPrice() {
-            try {
-                const response = await fetch('/api/price');
-                const data = await response.json();
-                return data;
-            } catch (error) {
-                console.error('Price fetch error:', error);
-                return { current: { price: 65000 }, signal: 'BUY' };
-            }
-        }
-
-        // Update price display
-        async function updatePriceDisplay() {
-            const priceData = await fetchRealPrice();
-            document.getElementById('currentPrice').textContent = '$' + priceData.current.price.toLocaleString();
-            document.getElementById('priceSource').textContent = priceData.current.source || 'Real-time';
-            
-            // Update AI signal
-            const signal = priceData.signal;
-            const signalEl = document.getElementById('aiSignal');
-            const signalTextEl = document.getElementById('signalText');
-            
-            if (signal === 'BUY') {
-                signalEl.textContent = '📈';
-                signalEl.className = 'signal-indicator signal-buy';
-                signalTextEl.textContent = 'Strong Buy Signal';
-            } else {
-                signalEl.textContent = '📉';
-                signalEl.className = 'signal-indicator signal-sell';
-                signalTextEl.textContent = 'Strong Sell Signal';
-            }
-            
-            // Update chart
-            if (priceChart) {
-                priceChart.data.labels.push(new Date().toLocaleTimeString());
-                priceChart.data.datasets[0].data.push(priceData.current.price);
-                
-                // Keep only last 20 points
-                if (priceChart.data.labels.length > 20) {
-                    priceChart.data.labels.shift();
-                    priceChart.data.datasets[0].data.shift();
-                }
-                
-                priceChart.update();
-            }
-        }
-
         // Execute trade
-        async function executeTrade(direction) {
-            const amount = parseFloat(document.getElementById('tradeAmount').value);
-            if (!amount || amount < 100 || amount > 1000) {
-                alert('Please enter an amount between $100 and $1000');
+        function executeTrade(type) {
+            var amount = parseFloat(document.getElementById('trade-amount').value);
+            if (!amount || amount <= 0 || !selectedCrypto) {
+                alert('Please enter a valid amount and select a cryptocurrency');
                 return;
             }
-
-            if (amount > userData.balance) {
+            
+            if (type === 'buy' && amount > userBalance) {
                 alert('Insufficient balance');
                 return;
             }
-
-            // Disable trade buttons
-            document.getElementById('buyBtn').disabled = true;
-            document.getElementById('sellBtn').disabled = true;
-
-            // Show trade progress with details
-            document.getElementById('tradeProgress').style.display = 'block';
-            document.getElementById('tradeDirection').textContent = direction;
-            document.getElementById('tradeDirection').className = 'trade-direction ' + direction.toLowerCase();
-            document.getElementById('tradeAmountDisplay').textContent = '$' + amount;
             
-            try {
-                // Create demo trade locally (no server call needed for demo)
-                const entryPrice = await getCurrentPrice();
-                
-                currentTrade = {
-                    id: crypto.randomUUID(),
-                    direction: direction,
+            if (!currentUser || currentUser === 'demo') {
+                // Demo mode - use local state
+                executeDemoTrade(type, amount);
+                return;
+            }
+            
+            // Real mode - call backend API
+            fetch(BASE_URL + '/api/trade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: currentUser,
+                    type: type,
+                    symbol: selectedCrypto.symbol,
                     amount: amount,
-                    entryPrice: entryPrice,
-                    timestamp: Date.now()
-                };
-                
-                // Display entry price
-                document.getElementById('entryPrice').textContent = '$' + currentTrade.entryPrice.toLocaleString();
-                
-                // Add trade entry marker to chart
-                addTradeMarker(currentTrade.entryPrice, 'entry', Date.now());
-                
-                // Start 20-second countdown with enhanced progress
-                startTradeCountdown(currentTrade);
-                
-            } catch (error) {
+                    price: selectedCrypto.price
+                })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    userBalance = data.balance;
+                    userPositions = data.positions || [];
+                    userHistory = data.tradeHistory || [];
+                    
+                    updateBalanceDisplay();
+                    updatePortfolioDisplay();
+                    updateHistoryDisplay();
+                    
+                    // Clear input
+                    document.getElementById('trade-amount').value = '';
+                    
+                    alert(data.message);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(function(error) {
                 console.error('Trade error:', error);
-                alert('Trade failed. Please try again.');
-                resetTrade();
-            }
-        }
-        
-        // Get current price for demo trading
-        async function getCurrentPrice() {
-            try {
-                const response = await fetch('/api/price');
-                const data = await response.json();
-                return data.current.price;
-            } catch (error) {
-                // Fallback price if API fails
-                return 65000 + Math.random() * 10000; // Random price between 65k-75k
-            }
-        }
-
-        // Start trade countdown with enhanced demo profit logic
-        function startTradeCountdown(trade) {
-            let timeLeft = 20;
-            const timerEl = document.getElementById('timer');
-            const livePnlEl = document.getElementById('livePnl');
-            const livePercentEl = document.getElementById('livePercent');
-            const currentPriceEl = document.getElementById('currentPrice');
-            
-            // Demo mode: Generate profitable price movement
-            const basePrice = trade.entryPrice;
-            const targetProfitPercent = 0.5 + Math.random() * 2; // 0.5% to 2.5% profit
-            const targetPrice = trade.direction === 'BUY' ? 
-                basePrice * (1 + targetProfitPercent / 100) : 
-                basePrice * (1 - targetProfitPercent / 100);
-            
-            const interval = setInterval(async () => {
-                timerEl.textContent = timeLeft;
-                
-                // Demo mode: Calculate favorable current price
-                const progress = (20 - timeLeft) / 20; // 0 to 1
-                let currentPrice;
-                
-                if (progress < 0.3) {
-                    // First 30%: Slight unfavorable movement to create tension
-                    const tensionFactor = trade.direction === 'BUY' ? -0.002 : 0.002;
-                    currentPrice = basePrice * (1 + tensionFactor * progress * 3);
-                } else {
-                    // Last 70%: Gradual movement towards profit
-                    const profitProgress = (progress - 0.3) / 0.7;
-                    const smoothProgress = 0.5 * (1 + Math.sin((profitProgress - 0.5) * Math.PI));
-                    currentPrice = basePrice + (targetPrice - basePrice) * smoothProgress;
-                }
-                
-                // Add small random fluctuations for realism
-                currentPrice *= (1 + (Math.random() - 0.5) * 0.001);
-                
-                // Update current price display
-                currentPriceEl.textContent = '$' + currentPrice.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2
-                });
-                
-                // Calculate P&L
-                let currentPnl = 0;
-                let percentChange = 0;
-                
-                if (trade.direction === 'BUY') {
-                    percentChange = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
-                    currentPnl = ((currentPrice - trade.entryPrice) / trade.entryPrice) * trade.amount;
-                } else {
-                    percentChange = ((trade.entryPrice - currentPrice) / trade.entryPrice) * 100;
-                    currentPnl = ((trade.entryPrice - currentPrice) / trade.entryPrice) * trade.amount;
-                }
-                
-                // Update P&L displays
-                livePnlEl.textContent = (currentPnl >= 0 ? '+' : '') + '$' + currentPnl.toFixed(2);
-                livePnlEl.className = 'live-pnl ' + (currentPnl >= 0 ? 'profit' : 'loss');
-                
-                livePercentEl.textContent = (percentChange >= 0 ? '+' : '') + percentChange.toFixed(2) + '%';
-                livePercentEl.className = 'live-percent ' + (percentChange >= 0 ? 'profit' : 'loss');
-                
-                timeLeft--;
-                
-                if (timeLeft < 0) {
-                    clearInterval(interval);
-                    // Ensure final result is profitable in demo mode
-                    const finalPnl = Math.abs(currentPnl) > 0 ? Math.abs(currentPnl) : trade.amount * 0.015;
-                    finalizeTrade(trade, finalPnl, currentPrice);
-                }
-            }, 1000);
-        }
-
-        // Finalize trade with enhanced result display
-        function finalizeTrade(trade, finalPnl, finalPrice) {
-            // Add trade exit marker to chart
-            addTradeMarker(finalPrice, 'exit', Date.now());
-            
-            // Hide progress, show result
-            document.getElementById('tradeProgress').style.display = 'none';
-            document.getElementById('tradeResult').style.display = 'block';
-            
-            const resultIconEl = document.getElementById('resultIcon');
-            const resultTextEl = document.getElementById('resultText');
-            const finalPnlEl = document.getElementById('finalPnl');
-            const finalBalanceEl = document.getElementById('finalBalance');
-            const profitPercentEl = document.getElementById('profitPercent');
-            
-            // Calculate percentage
-            const percentChange = trade.direction === 'BUY' ? 
-                ((finalPrice - trade.entryPrice) / trade.entryPrice) * 100 :
-                ((trade.entryPrice - finalPrice) / trade.entryPrice) * 100;
-            
-            // In demo mode, always show win (profit guaranteed)
-            if (finalPnl >= 0) {
-                resultIconEl.textContent = '🎉';
-                resultIconEl.className = 'result-icon win-icon';
-                resultTextEl.textContent = 'Congratulations! You won!';
-                userData.stats.wins++;
-            } else {
-                resultIconEl.textContent = '😔';
-                resultIconEl.className = 'result-icon lose-icon';
-                resultTextEl.textContent = 'Better luck next time!';
-            }
-            
-            // Create trade record
-            const tradeRecord = {
-                id: crypto.randomUUID(),
-                timestamp: Date.now(),
-                direction: trade.direction,
-                amount: trade.amount,
-                entryPrice: trade.entryPrice,
-                exitPrice: finalPrice,
-                profit: finalPnl,
-                percentage: percentChange
-            };
-            
-            // Update user balance and display
-            const newBalance = userData.balance + finalPnl;
-            
-            finalPnlEl.textContent = (finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(2);
-            finalPnlEl.className = 'live-pnl ' + (finalPnl >= 0 ? 'profit' : 'loss');
-            
-            if (profitPercentEl) {
-                profitPercentEl.textContent = (percentChange >= 0 ? '+' : '') + percentChange.toFixed(2) + '%';
-                profitPercentEl.className = 'live-percent ' + (percentChange >= 0 ? 'profit' : 'loss');
-            }
-            
-            if (finalBalanceEl) {
-                finalBalanceEl.textContent = '$' + newBalance.toFixed(2);
-            }
-            
-            // Update user data
-            userData.balance = newBalance;
-            userData.stats.total++;
-            userData.stats.profit += finalPnl;
-            userData.trades.push(tradeRecord);
-            
-            // Save to server if authenticated
-            saveUserData();
-            
-            // Update balance display
-            document.getElementById('balance').textContent = '$' + userData.balance.toFixed(2);
-            
-            updateStats();
-            
-            // Auto-hide result after 5 seconds
-            setTimeout(() => {
-                resetTrade();
-            }, 5000);
-        }
-
-        // Reset trade
-        function resetTrade() {
-            document.getElementById('tradeProgress').style.display = 'none';
-            document.getElementById('tradeResult').style.display = 'none';
-            document.getElementById('buyBtn').disabled = false;
-            document.getElementById('sellBtn').disabled = false;
-            currentTrade = null;
-        }
-
-        // Update statistics
-        function updateStats() {
-            document.getElementById('balance').textContent = '$' + userData.balance.toLocaleString();
-            document.getElementById('totalTrades').textContent = userData.stats.total;
-            document.getElementById('winRate').textContent = userData.stats.total > 0 ? 
-                Math.round((userData.stats.wins / userData.stats.total) * 100) + '%' : '0%';
-            document.getElementById('totalProfit').textContent = '$' + userData.stats.profit.toFixed(2);
-        }
-
-        // Deposit/Withdraw functions
-        function showDeposit() {
-            const amount = prompt('Enter deposit amount:', '1000');
-            if (amount && !isNaN(amount) && amount > 0) {
-                userData.balance += parseFloat(amount);
-                updateStats();
-                alert('Deposited $' + amount + ' successfully!');
-            }
-        }
-
-        function showWithdraw() {
-            const amount = prompt('Enter withdrawal amount:', '500');
-            if (amount && !isNaN(amount) && amount > 0) {
-                if (amount <= userData.balance) {
-                    userData.balance -= parseFloat(amount);
-                    updateStats();
-                    alert('Withdrew $' + amount + ' successfully!');
-                } else {
-                    alert('Insufficient balance');
-                }
-            }
-        }
-
-        // Initialize app
-        async function init() {
-            // Apply language first
-            applyLanguage(userLang);
-            
-            // Initialize Telegram authentication
-            initTelegramAuth();
-            
-            await initCharts();
-            updateStats();
-            updatePriceDisplay();
-            
-            // Update price every 5 seconds
-            setInterval(updatePriceDisplay, 5000);
-            
-            // Add enhanced trade progress modal functionality
-            enhanceTradeProgress();
-        }
-        
-        // Enhanced trade progress with emphasized modal
-        function enhanceTradeProgress() {
-            const progressEl = document.getElementById('tradeProgress');
-            
-            // Add click outside to close (but don't actually close during active trade)
-            progressEl.addEventListener('click', (e) => {
-                if (e.target === progressEl && !currentTrade) {
-                    progressEl.style.display = 'none';
-                }
+                alert('Error executing trade');
             });
         }
         
-        // Enhanced execute trade with modal
-        async function executeTrade(direction) {
-            const amount = parseFloat(document.getElementById('tradeAmount').value);
+        // Demo trade for demo users
+        function executeDemoTrade(type, amount) {
+            var price = selectedCrypto.price;
+            var quantity = amount / price;
             
-            if (!amount || amount < 100 || amount > 1000) {
-                alert(LANGUAGES[userLang].amount_placeholder);
-                return;
-            }
-            
-            if (amount > userData.balance) {
-                alert('Insufficient balance!');
-                return;
-            }
-            
-            // Show emphasized modal
-            const progressEl = document.getElementById('tradeProgress');
-            progressEl.style.display = 'block';
-            
-            // Disable buttons
-            document.getElementById('buyBtn').disabled = true;
-            document.getElementById('sellBtn').disabled = true;
-            
-            try {
-                const response = await fetch('/api/trade', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        amount: amount,
-                        direction: direction,
-                        userId: userId
-                    })
-                });
+            if (type === 'buy') {
+                userBalance -= amount;
                 
-                if (!response.ok) {
-                    throw new Error('Trade failed');
+                // Add to positions
+                var existingPos = null;
+                for (var i = 0; i < userPositions.length; i++) {
+                    if (userPositions[i].symbol === selectedCrypto.symbol) {
+                        existingPos = userPositions[i];
+                        break;
+                    }
                 }
                 
-                const trade = await response.json();
-                simulateTrade(trade);
+                if (existingPos) {
+                    var totalValue = existingPos.quantity * existingPos.avgPrice + amount;
+                    existingPos.quantity += quantity;
+                    existingPos.avgPrice = totalValue / existingPos.quantity;
+                } else {
+                    userPositions.push({
+                        symbol: selectedCrypto.symbol,
+                        name: selectedCrypto.name,
+                        quantity: quantity,
+                        avgPrice: price
+                    });
+                }
+            } else {
+                // Sell
+                var position = null;
+                for (var i = 0; i < userPositions.length; i++) {
+                    if (userPositions[i].symbol === selectedCrypto.symbol) {
+                        position = userPositions[i];
+                        break;
+                    }
+                }
                 
-            } catch (error) {
-                console.error('Trade error:', error);
-                alert('Trade failed. Please try again.');
-                resetTrade();
+                if (!position || position.quantity < quantity) {
+                    alert('Insufficient position to sell');
+                    return;
+                }
+                
+                userBalance += amount;
+                position.quantity -= quantity;
+                
+                if (position.quantity <= 0.0001) {
+                    userPositions = userPositions.filter(function(p) { return p.symbol !== selectedCrypto.symbol; });
+                }
+            }
+            
+            // Add to history
+            userHistory.unshift({
+                type: type,
+                symbol: selectedCrypto.symbol,
+                quantity: quantity,
+                price: price,
+                amount: amount,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Update UI
+            updateBalanceDisplay();
+            updatePortfolioDisplay();
+            updateHistoryDisplay();
+            
+            // Clear input
+            document.getElementById('trade-amount').value = '';
+            
+            alert(type.toUpperCase() + ' order executed: ' + quantity.toFixed(6) + ' ' + selectedCrypto.symbol + ' for $' + amount.toFixed(2));
+        }
+        
+        // Load user data
+        function loadUserData() {
+            if (!currentUser || currentUser === 'demo') {
+                // Use demo data for demo mode
+                updateBalanceDisplay();
+                updatePortfolioDisplay();
+                updateHistoryDisplay();
+                return;
+            }
+            
+            // Fetch real user data from backend
+            fetch(BASE_URL + '/api/user?userId=' + currentUser)
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.error) {
+                        console.error('User data error:', data.error);
+                        return;
+                    }
+                    
+                    userBalance = data.balance || 10;
+                    userPositions = data.positions || [];
+                    userHistory = data.tradeHistory || [];
+                    
+                    updateBalanceDisplay();
+                    updatePortfolioDisplay();
+                    updateHistoryDisplay();
+                })
+                .catch(function(error) {
+                    console.error('Error loading user data:', error);
+                    // Fall back to default values
+                    updateBalanceDisplay();
+                    updatePortfolioDisplay();
+                    updateHistoryDisplay();
+                });
+        }
+        
+        // Update balance display
+        function updateBalanceDisplay() {
+            var balanceEls = document.querySelectorAll('#balance, #wallet-balance');
+            for (var i = 0; i < balanceEls.length; i++) {
+                if (balanceEls[i]) balanceEls[i].textContent = '$' + userBalance.toFixed(2);
             }
         }
-
-        // Start the app
-        init();
+        
+        // Update portfolio display
+        function updatePortfolioDisplay() {
+            var portfolioEl = document.getElementById('positions-list');
+            var portfolioValueEl = document.getElementById('portfolio-value');
+            
+            if (!portfolioEl || !portfolioValueEl) return;
+            
+            if (userPositions.length === 0) {
+                portfolioEl.innerHTML = '<div class="loading">No open positions</div>';
+                portfolioValueEl.textContent = '$' + userBalance.toFixed(2);
+                return;
+            }
+            
+            var totalValue = userBalance;
+            var html = '';
+            
+            for (var i = 0; i < userPositions.length; i++) {
+                var pos = userPositions[i];
+                var currentPrice = pos.avgPrice;
+                
+                // Find current price
+                for (var j = 0; j < cryptoPrices.length; j++) {
+                    if (cryptoPrices[j].symbol === pos.symbol) {
+                        currentPrice = cryptoPrices[j].price;
+                        break;
+                    }
+                }
+                
+                var currentValue = pos.quantity * currentPrice;
+                var pnl = currentValue - (pos.quantity * pos.avgPrice);
+                var pnlPercent = (pnl / (pos.quantity * pos.avgPrice)) * 100;
+                var pnlClass = pnl >= 0 ? 'positive' : 'negative';
+                var pnlSign = pnl >= 0 ? '+' : '';
+                
+                totalValue += currentValue;
+                
+                html += '<div class="position-item">';
+                html += '  <div>';
+                html += '    <div style="font-weight: bold;">' + pos.symbol + '</div>';
+                html += '    <div style="font-size: 12px; color: #ccc;">' + pos.quantity.toFixed(6) + ' units</div>';
+                html += '  </div>';
+                html += '  <div style="text-align: right;">';
+                html += '    <div style="font-weight: bold;">$' + currentValue.toFixed(2) + '</div>';
+                html += '    <div class="' + pnlClass + '" style="font-size: 12px;">';
+                html += '      ' + pnlSign + '$' + pnl.toFixed(2) + ' (' + pnlPercent.toFixed(2) + '%)';
+                html += '    </div>';
+                html += '  </div>';
+                html += '</div>';
+            }
+            
+            portfolioEl.innerHTML = html;
+            portfolioValueEl.textContent = '$' + totalValue.toFixed(2);
+        }
+        
+        // Update history display
+        function updateHistoryDisplay() {
+            var historyEl = document.getElementById('trade-history');
+            if (!historyEl) return;
+            
+            if (userHistory.length === 0) {
+                historyEl.innerHTML = '<div class="loading">No trade history</div>';
+                return;
+            }
+            
+            var html = '';
+            for (var i = 0; i < userHistory.length; i++) {
+                var trade = userHistory[i];
+                var typeColor = trade.type === 'buy' ? '#4CAF50' : '#f44336';
+                
+                html += '<div class="history-item">';
+                html += '  <div>';
+                html += '    <div style="font-weight: bold; color: ' + typeColor + ';">';
+                html += '      ' + trade.type.toUpperCase() + ' ' + trade.symbol;
+                html += '    </div>';
+                html += '    <div style="color: #ccc;">';
+                html += '      ' + new Date(trade.timestamp).toLocaleString();
+                html += '    </div>';
+                html += '  </div>';
+                html += '  <div style="text-align: right;">';
+                html += '    <div>' + trade.quantity.toFixed(6) + ' units</div>';
+                html += '    <div>$' + trade.amount.toFixed(2) + '</div>';
+                html += '  </div>';
+                html += '</div>';
+            }
+            
+            historyEl.innerHTML = html;
+        }
+        
+        // Show tab
+        function showTab(tabName) {
+            // Hide all tabs
+            var tabs = document.querySelectorAll('.tab-content');
+            for (var i = 0; i < tabs.length; i++) {
+                tabs[i].classList.remove('active');
+            }
+            var navTabs = document.querySelectorAll('.nav-tab');
+            for (var i = 0; i < navTabs.length; i++) {
+                navTabs[i].classList.remove('active');
+            }
+            
+            // Show selected tab
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+            
+            // Refresh data if needed
+            if (tabName === 'portfolio') {
+                updatePortfolioDisplay();
+            } else if (tabName === 'history') {
+                updateHistoryDisplay();
+            }
+        }
+        
+        // Wallet functions
+        function showDeposit() {
+            var amount = prompt('Enter deposit amount:');
+            if (amount && !isNaN(amount) && parseFloat(amount) > 0) {
+                // Call backend API
+                fetch(BASE_URL + '/api/wallet', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'deposit',
+                        userId: currentUser,
+                        amount: parseFloat(amount)
+                    })
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        userBalance = data.balance;
+                        updateBalanceDisplay();
+                        alert(data.message);
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(function(error) {
+                    console.error('Deposit error:', error);
+                    alert('Error processing deposit');
+                });
+            }
+        }
+        
+        function showWithdraw() {
+            var amount = prompt('Enter withdrawal amount:');
+            if (amount && !isNaN(amount) && parseFloat(amount) > 0) {
+                // Call backend API
+                fetch(BASE_URL + '/api/wallet', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'withdraw',
+                        userId: currentUser,
+                        amount: parseFloat(amount)
+                    })
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        userBalance = data.balance;
+                        updateBalanceDisplay();
+                        alert(data.message);
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(function(error) {
+                    console.error('Withdrawal error:', error);
+                    alert('Error processing withdrawal');
+                });
+            }
+        }
+        
+        // Auto-refresh prices every 30 seconds
+        setInterval(loadPrices, 30000);
+        
+        // Initialize the app
+        initApp();
     </script>
 </body>
 </html>`;
 }
-
-
