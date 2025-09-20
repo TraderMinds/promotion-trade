@@ -1203,6 +1203,32 @@ function MINIAPP_HTML(env: Env) {
     </style>
 </head>
 <body>
+    <!-- Debug Panel - Very Visible -->
+    <div id="debug-panel" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: red; color: white; padding: 20px; border: 3px solid yellow; font-size: 16px; z-index: 99999; width: 300px; text-align: center;">
+        <h3>DEBUG INFO</h3>
+        <div>BASE_URL: <span id="debug-base-url">checking...</span></div>
+        <div>FETCH: <span id="debug-fetch">checking...</span></div>
+        <div>STATUS: <span id="debug-status">initializing...</span></div>
+        <button onclick="hideDebugPanel()" style="margin-top: 10px; padding: 5px 10px; background: white; color: red; border: none; cursor: pointer;">Hide Debug</button>
+    </div>
+
+    <!-- Immediate JavaScript Test -->
+    <script>
+        console.log('🚀 IMMEDIATE SCRIPT TEST - JavaScript is working!');
+        // Test debug panel update immediately
+        try {
+            var testEl = document.getElementById('debug-status');
+            if (testEl) {
+                testEl.textContent = 'JS WORKING!';
+                console.log('✅ Successfully updated debug status');
+            } else {
+                console.log('❌ Could not find debug-status element');
+            }
+        } catch (e) {
+            console.error('❌ Error in immediate script:', e);
+        }
+    </script>
+
     <div class="container">
         <div class="header">
             <h1>🚀 TradeX Pro</h1>
@@ -1283,6 +1309,74 @@ function MINIAPP_HTML(env: Env) {
     </div>
 
     <script>
+        // INLINE DEBUG SCRIPT - Set debug info immediately
+        console.log('🔧 INLINE DEBUG: Setting debug info...');
+        console.log('🔧 BASE_URL from server: ${baseUrl}');
+        
+        setTimeout(function() {
+            try {
+                var baseUrlEl = document.getElementById('debug-base-url');
+                var fetchEl = document.getElementById('debug-fetch');
+                var statusEl = document.getElementById('debug-status');
+                
+                if (baseUrlEl) {
+                    baseUrlEl.textContent = '${baseUrl}';
+                    console.log('✅ Set BASE_URL debug');
+                }
+                if (fetchEl) {
+                    fetchEl.textContent = typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE';
+                    console.log('✅ Set FETCH debug');
+                }
+                if (statusEl) {
+                    statusEl.textContent = 'loading prices...';
+                    console.log('✅ Set STATUS debug');
+                }
+                
+                // Load prices directly in inline script
+                console.log('🚀 Loading prices from inline script...');
+                fetch('${baseUrl}/api/prices')
+                    .then(function(response) {
+                        console.log('📥 Response received:', response.status);
+                        if (statusEl) statusEl.textContent = 'response: ' + response.status;
+                        return response.json();
+                    })
+                    .then(function(data) {
+                        console.log('✅ Data received:', data);
+                        if (statusEl) statusEl.textContent = 'displaying prices...';
+                        
+                        // Display prices
+                        var cryptoList = document.getElementById('crypto-list');
+                        if (cryptoList) {
+                            var html = '';
+                            for (var i = 0; i < data.length; i++) {
+                                var crypto = data[i];
+                                var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
+                                var changeSymbol = crypto.change >= 0 ? '+' : '';
+                                html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
+                                html += '<div class="crypto-info">';
+                                html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
+                                html += '<div class="crypto-price">$' + crypto.price.toLocaleString();</div>';
+                                html += '</div>';
+                                html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
+                                html += '</div>';
+                            }
+                            cryptoList.innerHTML = html;
+                            console.log('✅ Prices displayed successfully');
+                            if (statusEl) statusEl.textContent = 'prices loaded!';
+                        }
+                    })
+                    .catch(function(error) {
+                        console.error('❌ Error loading prices:', error);
+                        if (statusEl) statusEl.textContent = 'ERROR: ' + error.message;
+                    });
+                
+            } catch (e) {
+                console.error('❌ Error in inline debug:', e);
+            }
+        }, 100);
+    </script>
+
+    <script>
         console.log('🚀 MiniApp JavaScript starting...');
         
         // Global state
@@ -1292,27 +1386,41 @@ function MINIAPP_HTML(env: Env) {
         var userBalance = 10.00;
         var userPositions = [];
         var userHistory = [];
-        var BASE_URL = 'https://promotion-trade-bot.tradermindai.workers.dev';
+        var BASE_URL = '${baseUrl}';
         console.log('DEBUG: BASE_URL = ', BASE_URL);
         
         // Update debug info
         function updateDebugInfo(key, value) {
+            console.log('🔧 updateDebugInfo called:', key, '=', value);
             var debugEl = document.getElementById('debug-' + key);
             if (debugEl) {
-                debugEl.textContent = key.toUpperCase() + ': ' + value;
-            }
-            // Show debug panel if there are issues
-            var debugPanel = document.getElementById('debug-info');
-            if (debugPanel) {
-                debugPanel.style.display = 'block';
+                debugEl.textContent = value;
+                console.log('✅ Updated debug element:', key, '=', value);
+            } else {
+                console.log('❌ Debug element not found:', 'debug-' + key);
             }
         }
         
-        // Initialize debug info
+        // Hide debug panel
+        function hideDebugPanel() {
+            var debugPanel = document.getElementById('debug-panel');
+            if (debugPanel) {
+                debugPanel.style.display = 'none';
+            }
+        }
+        
+        // Initialize debug info immediately
+        console.log('🔧 Initializing debug info...');
+        updateDebugInfo('base-url', BASE_URL);
+        updateDebugInfo('fetch', typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE');
+        updateDebugInfo('status', 'script loaded');
+        
+        // Also try after a short delay in case DOM isn't ready
         setTimeout(function() {
+            console.log('🔧 Secondary debug info update...');
             updateDebugInfo('base-url', BASE_URL);
             updateDebugInfo('fetch', typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE');
-            updateDebugInfo('status', 'starting initialization');
+            updateDebugInfo('status', 'dom ready check');
         }, 100);
         
         // Get URL parameters
@@ -1904,6 +2012,18 @@ function MINIAPP_HTML(env: Env) {
             console.log('🌐 Standard web context, initializing normally...');
             initializeApp();
         }
+        
+        // Emergency fallback - try to load prices after 2 seconds regardless
+        setTimeout(function() {
+            console.log('🚨 Emergency fallback check...');
+            updateDebugInfo('status', 'fallback check');
+            var cryptoList = document.getElementById('crypto-list');
+            if (cryptoList && cryptoList.innerHTML.includes('Loading prices...')) {
+                console.log('🔧 Still loading, trying emergency price load...');
+                updateDebugInfo('status', 'emergency load');
+                loadPrices();
+            }
+        }, 2000);
     </script>
 </body>
 </html>`;
