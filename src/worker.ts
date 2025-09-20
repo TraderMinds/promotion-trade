@@ -100,7 +100,12 @@ function getTexts(langCode: string) {
 function json(obj: any, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { 'Content-Type': 'application/json' }
+    headers: { 
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    }
   });
 }
 
@@ -116,7 +121,12 @@ async function handlePriceAPI(env: Env): Promise<Response> {
       // Check if cache is less than 1 minute old
       if (Date.now() - data.timestamp < 60000) {
         return new Response(JSON.stringify(data.prices), {
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
     }
@@ -155,7 +165,12 @@ async function handlePriceAPI(env: Env): Promise<Response> {
     await env.TRADING_KV.put(cacheKey, JSON.stringify(cacheData), { expirationTtl: 300 }); // 5 minutes TTL
     
     return new Response(JSON.stringify(cryptoPrices), {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   } catch (error) {
     console.error('Price API error:', error);
@@ -170,7 +185,12 @@ async function handlePriceAPI(env: Env): Promise<Response> {
     ];
     
     return new Response(JSON.stringify(mockPrices), {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
 }
@@ -183,18 +203,28 @@ async function handleWalletAPI(request: Request, env: Env): Promise<Response> {
     if (!userId || !action) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { 
         status: 400,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     }
     
     // Get current user data
-    const userData = await getUserData(parseInt(userId), env);
+    const userData = await getUserData(parseInt(userId), env) || {};
     
     if (action === 'deposit') {
       if (!amount || amount <= 0) {
         return new Response(JSON.stringify({ error: 'Invalid deposit amount' }), { 
           status: 400,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
       
@@ -214,20 +244,35 @@ async function handleWalletAPI(request: Request, env: Env): Promise<Response> {
         balance: userData.balance,
         message: `$${amount} deposited successfully!`
       }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     } else if (action === 'withdraw') {
       if (!amount || amount <= 0) {
         return new Response(JSON.stringify({ error: 'Invalid withdrawal amount' }), { 
           status: 400,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
       
       if (amount > userData.balance) {
         return new Response(JSON.stringify({ error: 'Insufficient balance' }), { 
           status: 400,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
       
@@ -247,19 +292,34 @@ async function handleWalletAPI(request: Request, env: Env): Promise<Response> {
         balance: userData.balance,
         message: `$${amount} withdrawn successfully!`
       }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     } else {
       return new Response(JSON.stringify({ error: 'Invalid action' }), { 
         status: 400,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     }
   } catch (error) {
     console.error('Wallet API error:', error);
     return new Response(JSON.stringify({ error: 'Internal server error' }), { 
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
 }
@@ -271,29 +331,45 @@ async function handleUserDataAPI(url: URL, env: Env): Promise<Response> {
     if (!userId) {
       return new Response(JSON.stringify({ error: 'Missing userId parameter' }), { 
         status: 400,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     }
     
     const userData = await getUserData(parseInt(userId), env);
     
-    // Return user data without sensitive information
+    // Return user data without sensitive information - handle null userData
+    const safeUserData = userData || {};
     return new Response(JSON.stringify({
-      balance: userData.balance || 10,
-      positions: userData.positions || [],
-      tradeHistory: userData.tradeHistory || [],
-      transactions: userData.transactions || [],
-      totalTrades: userData.totalTrades || 0,
-      winRate: userData.winRate || 0,
-      registered: userData.registered || false
+      balance: safeUserData.balance || 10,
+      positions: safeUserData.positions || [],
+      tradeHistory: safeUserData.tradeHistory || [],
+      transactions: safeUserData.transactions || [],
+      totalTrades: safeUserData.totalTrades || 0,
+      winRate: safeUserData.winRate || 0,
+      registered: safeUserData.registered || false
     }), {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   } catch (error) {
     console.error('User data API error:', error);
     return new Response(JSON.stringify({ error: 'Internal server error' }), { 
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
 }
@@ -306,11 +382,16 @@ async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
     if (!userId || !type || !symbol || !amount || !price) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { 
         status: 400,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
       });
     }
     
-    const userData = await getUserData(parseInt(userId), env);
+    const userData = await getUserData(parseInt(userId), env) || {};
     const quantity = amount / price;
     
     // Initialize arrays if they don't exist
@@ -323,7 +404,12 @@ async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
       if (amount > userData.balance) {
         return new Response(JSON.stringify({ error: 'Insufficient balance' }), { 
           status: 400,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
       
@@ -348,7 +434,12 @@ async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
       if (!position || position.quantity < quantity) {
         return new Response(JSON.stringify({ error: 'Insufficient position to sell' }), { 
           status: 400,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type'
+          }
         });
       }
       
@@ -408,13 +499,23 @@ async function handleTradeAPI(request: Request, env: Env): Promise<Response> {
       winRate: userData.winRate,
       message: `${type.toUpperCase()} order executed: ${quantity.toFixed(6)} ${symbol} for $${amount.toFixed(2)}`
     }), {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   } catch (error) {
     console.error('Trade API error:', error);
     return new Response(JSON.stringify({ error: 'Internal server error' }), { 
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
 }
@@ -438,6 +539,18 @@ async function sendTelegram(env: Env, method: string, params: any): Promise<any>
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    
+    // Handle CORS preflight requests
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Max-Age': '86400'
+        }
+      });
+    }
     
     // Basic health check
     if (url.pathname === '/') {
@@ -778,15 +891,29 @@ async function saveUserData(userId: number, userData: any, env: Env): Promise<vo
 
 function serveMiniApp(url: URL, env: Env): Response {
   if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
-    return new Response(MINIAPP_HTML(env), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    return new Response(MINIAPP_HTML(env), { 
+      headers: { 
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy': "default-src 'self' https:; script-src 'self' 'unsafe-inline' https://telegram.org https://cdn.jsdelivr.net; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:"
+      } 
+    });
   }
   return new Response('Not found', { status: 404 });
 }
 
 function MINIAPP_HTML(env: Env) {
   const baseUrl = env.BASE_URL || 'https://promotion-trade-bot.tradermindai.workers.dev';
+  console.log('Server-side baseUrl:', baseUrl);
   
   return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeX Pro - AI Trading Bot</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1098,7 +1225,13 @@ function MINIAPP_HTML(env: Env) {
             </div>
             
             <div class="crypto-list" id="crypto-list">
-                <div class="loading">Loading prices...</div>
+                <div class="loading" id="loading-indicator">Loading prices...</div>
+                <div id="debug-info" style="font-size: 12px; color: #666; padding: 10px; display: none;">
+                    <div>🔧 Debug Info:</div>
+                    <div id="debug-base-url">BASE_URL: not set</div>
+                    <div id="debug-fetch">Fetch: not tested</div>
+                    <div id="debug-status">Status: initializing</div>
+                </div>
             </div>
             
             <div class="trading-panel" id="trading-panel" style="display: none;">
@@ -1159,7 +1292,28 @@ function MINIAPP_HTML(env: Env) {
         var userBalance = 10.00;
         var userPositions = [];
         var userHistory = [];
-        var BASE_URL = '${baseUrl}';
+        var BASE_URL = 'https://promotion-trade-bot.tradermindai.workers.dev';
+        console.log('DEBUG: BASE_URL = ', BASE_URL);
+        
+        // Update debug info
+        function updateDebugInfo(key, value) {
+            var debugEl = document.getElementById('debug-' + key);
+            if (debugEl) {
+                debugEl.textContent = key.toUpperCase() + ': ' + value;
+            }
+            // Show debug panel if there are issues
+            var debugPanel = document.getElementById('debug-info');
+            if (debugPanel) {
+                debugPanel.style.display = 'block';
+            }
+        }
+        
+        // Initialize debug info
+        setTimeout(function() {
+            updateDebugInfo('base-url', BASE_URL);
+            updateDebugInfo('fetch', typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE');
+            updateDebugInfo('status', 'starting initialization');
+        }, 100);
         
         // Get URL parameters
         var urlParams = new URLSearchParams(window.location.search);
@@ -1190,9 +1344,11 @@ function MINIAPP_HTML(env: Env) {
             }
             
             // Load prices
+            console.log('🚀 About to call loadPrices()');
             loadPrices();
             
             // Load user data
+            console.log('👤 About to call loadUserData()');
             loadUserData();
             
             console.log('MiniApp initialized successfully');
@@ -1200,27 +1356,77 @@ function MINIAPP_HTML(env: Env) {
         
         // Load cryptocurrency prices
         function loadPrices() {
+            console.log('🔄 Starting loadPrices...');
+            console.log('🌐 BASE_URL:', BASE_URL);
+            console.log('📡 Fetching from:', BASE_URL + '/api/prices');
+            console.log('🔧 fetch available:', typeof fetch !== 'undefined');
+            console.log('🌍 Network state:', navigator.onLine);
+            
+            updateDebugInfo('status', 'loading prices...');
+            
+            // Test if fetch is available
+            if (typeof fetch === 'undefined') {
+                console.error('❌ fetch API not available!');
+                updateDebugInfo('status', 'ERROR: fetch not available');
+                displayCryptoPrices();
+                return;
+            }
+            
             fetch(BASE_URL + '/api/prices')
-                .then(function(response) { return response.json(); })
+                .then(function(response) { 
+                    console.log('📥 Response received:', response.status, response.statusText);
+                    console.log('📥 Response headers:', response.headers);
+                    console.log('📥 Response OK:', response.ok);
+                    console.log('📥 Response type:', response.type);
+                    updateDebugInfo('status', 'response: ' + response.status);
+                    if (!response.ok) {
+                        throw new Error('HTTP error! status: ' + response.status);
+                    }
+                    return response.json(); 
+                })
                 .then(function(data) {
+                    console.log('✅ Data received:', data);
+                    console.log('📊 Number of prices:', data.length);
+                    updateDebugInfo('status', 'data received: ' + data.length + ' items');
                     cryptoPrices = data;
                     displayCryptoPrices();
                 })
                 .catch(function(error) {
-                    console.error('Error loading prices:', error);
+                    console.error('❌ Error loading prices:', error);
+                    console.error('❌ Error details:', error.message);
+                    console.error('❌ Error stack:', error.stack);
+                    console.error('❌ Error name:', error.name);
+                    updateDebugInfo('status', 'ERROR: ' + error.message);
                     displayCryptoPrices(); // Show with empty data
                 });
         }
         
         // Display crypto prices
         function displayCryptoPrices() {
+            console.log('🎨 displayCryptoPrices called');
+            console.log('📊 cryptoPrices:', cryptoPrices);
+            console.log('📊 cryptoPrices.length:', cryptoPrices.length);
+            
+            updateDebugInfo('status', 'displaying prices...');
+            
             var listEl = document.getElementById('crypto-list');
-            if (!listEl) return;
+            console.log('🎯 crypto-list element:', listEl);
+            
+            if (!listEl) {
+                console.error('❌ crypto-list element not found!');
+                updateDebugInfo('status', 'ERROR: crypto-list not found');
+                return;
+            }
             
             if (cryptoPrices.length === 0) {
+                console.log('⚠️ No prices available, showing error message');
+                updateDebugInfo('status', 'No prices available');
                 listEl.innerHTML = '<div class="loading">Unable to load prices</div>';
                 return;
             }
+            
+            console.log('✅ Rendering prices for', cryptoPrices.length, 'cryptocurrencies');
+            updateDebugInfo('status', 'rendering ' + cryptoPrices.length + ' prices');
             
             var html = '';
             for (var i = 0; i < cryptoPrices.length; i++) {
@@ -1242,7 +1448,18 @@ function MINIAPP_HTML(env: Env) {
                 html += '</div>';
             }
             
+            console.log('🖼️ Setting innerHTML with', html.length, 'characters');
             listEl.innerHTML = html;
+            console.log('✅ Prices displayed successfully');
+            updateDebugInfo('status', 'SUCCESS: ' + cryptoPrices.length + ' prices displayed');
+            
+            // Hide debug panel after successful load
+            var debugPanel = document.getElementById('debug-info');
+            if (debugPanel && cryptoPrices.length > 0) {
+                setTimeout(function() {
+                    debugPanel.style.display = 'none';
+                }, 3000);
+            }
         }
         
         // Select crypto for trading
@@ -1663,8 +1880,30 @@ function MINIAPP_HTML(env: Env) {
         // Auto-refresh prices every 30 seconds
         setInterval(loadPrices, 30000);
         
-        // Initialize the app
-        initApp();
+        // Initialize the app when DOM is ready
+        function initializeApp() {
+            console.log('🚀 Initializing app...');
+            console.log('📱 Telegram WebApp available:', typeof window.Telegram !== 'undefined');
+            console.log('🌐 Current location:', window.location.href);
+            console.log('🔧 User agent:', navigator.userAgent);
+            
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initApp);
+            } else {
+                initApp();
+            }
+        }
+        
+        // Wait for Telegram WebApp to be ready if available
+        if (typeof window.Telegram !== 'undefined' && window.Telegram.WebApp) {
+            console.log('📱 Telegram WebApp detected, waiting for ready...');
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+            initializeApp();
+        } else {
+            console.log('🌐 Standard web context, initializing normally...');
+            initializeApp();
+        }
     </script>
 </body>
 </html>`;
