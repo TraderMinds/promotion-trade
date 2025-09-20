@@ -1203,13 +1203,8 @@ function MINIAPP_HTML(env: Env) {
     </style>
 </head>
 <body>
-    <!-- Debug Panel - Very Visible -->
-    <div id="debug-panel" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: red; color: white; padding: 20px; border: 3px solid yellow; font-size: 16px; z-index: 99999; width: 300px; text-align: center;">
-        <h3>DEBUG INFO</h3>
-        <div>BASE_URL: <span id="debug-base-url">checking...</span></div>
-        <div>FETCH: <span id="debug-fetch">checking...</span></div>
-        <div>STATUS: <span id="debug-status">initializing...</span></div>
-        <button onclick="hideDebugPanel()" style="margin-top: 10px; padding: 5px 10px; background: white; color: red; border: none; cursor: pointer;">Hide Debug</button>
+    <!-- Debug Panel - Hidden Now That It Works -->
+    <div id="debug-panel" style="display: none;">
     </div>
 
     <!-- Immediate JavaScript Test -->
@@ -1224,6 +1219,129 @@ function MINIAPP_HTML(env: Env) {
             } else {
                 console.log('❌ Could not find debug-status element');
             }
+            
+            // Fix user info display
+            var userTypeEl = document.getElementById('userType');
+            if (userTypeEl) {
+                userTypeEl.textContent = '👤 Demo Mode';
+                userTypeEl.style.color = '#888';
+                console.log('✅ Fixed user info display');
+            }
+            
+            // Add tab functionality
+            window.showTab = function(tabName) {
+                console.log('🔄 Switching to tab:', tabName);
+                
+                // Hide all tabs
+                var tabs = ['trade', 'portfolio', 'wallet', 'history'];
+                for (var i = 0; i < tabs.length; i++) {
+                    var tabContent = document.getElementById(tabs[i] + '-tab');
+                    var tabButton = document.querySelector('.nav-tab[onclick*="' + tabs[i] + '"]');
+                    
+                    if (tabContent) {
+                        if (tabs[i] === tabName) {
+                            tabContent.style.display = 'block';
+                            tabContent.classList.add('active');
+                        } else {
+                            tabContent.style.display = 'none';
+                            tabContent.classList.remove('active');
+                        }
+                    }
+                    
+                    if (tabButton) {
+                        if (tabs[i] === tabName) {
+                            tabButton.classList.add('active');
+                        } else {
+                            tabButton.classList.remove('active');
+                        }
+                    }
+                }
+            };
+            
+            // Add hide debug function
+            window.hideDebugPanel = function() {
+                var debugPanel = document.getElementById('debug-panel');
+                if (debugPanel) {
+                    debugPanel.style.display = 'none';
+                }
+            };
+            
+            console.log('✅ Added tab functionality');
+            
+            // Set up DOM ready handler for price loading
+            function loadPricesWhenReady() {
+                console.log('🔧 DOM ready check...');
+                try {
+                    var baseUrlEl = document.getElementById('debug-base-url');
+                    var fetchEl = document.getElementById('debug-fetch');
+                    var statusEl = document.getElementById('debug-status');
+                    
+                    if (baseUrlEl && fetchEl && statusEl) {
+                        console.log('✅ All debug elements found');
+                        
+                        baseUrlEl.textContent = '${baseUrl}';
+                        fetchEl.textContent = typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE';
+                        statusEl.textContent = 'loading prices...';
+                        
+                        // Load prices
+                        console.log('🚀 Loading prices...');
+                        fetch('${baseUrl}/api/prices')
+                            .then(function(response) {
+                                console.log('📥 Response received:', response.status);
+                                statusEl.textContent = 'response: ' + response.status;
+                                return response.json();
+                            })
+                            .then(function(data) {
+                                console.log('✅ Data received:', data);
+                                statusEl.textContent = 'displaying prices...';
+                                
+                                // Display prices
+                                var cryptoList = document.getElementById('crypto-list');
+                                if (cryptoList) {
+                                    var html = '';
+                                    for (var i = 0; i < data.length; i++) {
+                                        var crypto = data[i];
+                                        var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
+                                        var changeSymbol = crypto.change >= 0 ? '+' : '';
+                                        html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
+                                        html += '<div class="crypto-info">';
+                                        html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
+                                        html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
+                                        html += '</div>';
+                                        html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
+                                        html += '</div>';
+                                    }
+                                    cryptoList.innerHTML = html;
+                                    console.log('✅ Prices displayed successfully');
+                                    statusEl.textContent = 'prices loaded!';
+                                    
+                                    // Add crypto selection functionality
+                                    window.selectCrypto = function(symbol) {
+                                        console.log('🎯 Selected crypto:', symbol);
+                                        alert('Selected ' + symbol + '! Trading functionality coming soon.');
+                                    };
+                                    
+                                } else {
+                                    console.log('❌ crypto-list element not found');
+                                    statusEl.textContent = 'ERROR: no crypto-list';
+                                }
+                            })
+                            .catch(function(error) {
+                                console.error('❌ Error loading prices:', error);
+                                statusEl.textContent = 'ERROR: ' + error.message;
+                            });
+                    } else {
+                        console.log('❌ Some debug elements not found, retrying...');
+                        setTimeout(loadPricesWhenReady, 100);
+                    }
+                } catch (e) {
+                    console.error('❌ Error in loadPricesWhenReady:', e);
+                }
+            }
+            
+            // Start loading process
+            setTimeout(loadPricesWhenReady, 100);
+            
         } catch (e) {
             console.error('❌ Error in immediate script:', e);
         }
@@ -1307,74 +1425,6 @@ function MINIAPP_HTML(env: Env) {
             </div>
         </div>
     </div>
-
-    <script>
-        // INLINE DEBUG SCRIPT - Set debug info immediately
-        console.log('🔧 INLINE DEBUG: Setting debug info...');
-        console.log('🔧 BASE_URL from server: ${baseUrl}');
-        
-        setTimeout(function() {
-            try {
-                var baseUrlEl = document.getElementById('debug-base-url');
-                var fetchEl = document.getElementById('debug-fetch');
-                var statusEl = document.getElementById('debug-status');
-                
-                if (baseUrlEl) {
-                    baseUrlEl.textContent = '${baseUrl}';
-                    console.log('✅ Set BASE_URL debug');
-                }
-                if (fetchEl) {
-                    fetchEl.textContent = typeof fetch !== 'undefined' ? 'available' : 'NOT AVAILABLE';
-                    console.log('✅ Set FETCH debug');
-                }
-                if (statusEl) {
-                    statusEl.textContent = 'loading prices...';
-                    console.log('✅ Set STATUS debug');
-                }
-                
-                // Load prices directly in inline script
-                console.log('🚀 Loading prices from inline script...');
-                fetch('${baseUrl}/api/prices')
-                    .then(function(response) {
-                        console.log('📥 Response received:', response.status);
-                        if (statusEl) statusEl.textContent = 'response: ' + response.status;
-                        return response.json();
-                    })
-                    .then(function(data) {
-                        console.log('✅ Data received:', data);
-                        if (statusEl) statusEl.textContent = 'displaying prices...';
-                        
-                        // Display prices
-                        var cryptoList = document.getElementById('crypto-list');
-                        if (cryptoList) {
-                            var html = '';
-                            for (var i = 0; i < data.length; i++) {
-                                var crypto = data[i];
-                                var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
-                                var changeSymbol = crypto.change >= 0 ? '+' : '';
-                                html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
-                                html += '<div class="crypto-info">';
-                                html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
-                                html += '<div class="crypto-price">$' + crypto.price.toLocaleString();</div>';
-                                html += '</div>';
-                                html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
-                                html += '</div>';
-                            }
-                            cryptoList.innerHTML = html;
-                            console.log('✅ Prices displayed successfully');
-                            if (statusEl) statusEl.textContent = 'prices loaded!';
-                        }
-                    })
-                    .catch(function(error) {
-                        console.error('❌ Error loading prices:', error);
-                        if (statusEl) statusEl.textContent = 'ERROR: ' + error.message;
-                    });
-                
-            } catch (e) {
-                console.error('❌ Error in inline debug:', e);
-            }
-        }, 100);
-    </script>
 
     <script>
         console.log('🚀 MiniApp JavaScript starting...');
