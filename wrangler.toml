@@ -10,3 +10,4 @@ id = "e3a447233870468b8578949670da47fe"
 # Placeholder; set real token via dashboard secret: TELEGRAM_BOT_TOKEN
 BASE_URL = "https://promotion-trade-bot.tradermindai.workers.dev"
 MINIAPP_URL = "https://promotion-trade-bot.tradermindai.workers.dev/miniapp"
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
