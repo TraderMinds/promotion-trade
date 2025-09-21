@@ -654,7 +654,7 @@ function MINIAPP_HTML(env: Env) {
         }
         
         .ai-signals::before {
-            content: '';
+            content: \'\';
             position: absolute;
             top: 0;
             left: 0;
