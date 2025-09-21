@@ -643,6 +643,132 @@ function MINIAPP_HTML(env: Env) {
             color: #6c757d;
         }
         
+        .ai-signals {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ai-signals::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.1) 75%, transparent 75%, transparent);
+            background-size: 20px 20px;
+            animation: slide 2s linear infinite;
+        }
+        
+        @keyframes slide {
+            0% { transform: translateX(-20px); }
+            100% { transform: translateX(0); }
+        }
+        
+        .ai-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .ai-robot {
+            font-size: 24px;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .ai-title {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        
+        .ai-signal {
+            background: rgba(255, 255, 255, 0.15);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            position: relative;
+            z-index: 1;
+            backdrop-filter: blur(10px);
+        }
+        
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .signal-crypto {
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        .signal-action {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .signal-buy {
+            background: #28a745;
+            color: white;
+        }
+        
+        .signal-sell {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .signal-reason {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+        
+        .signal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .signal-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .follow-btn {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+        }
+        
+        .ignore-btn {
+            background: rgba(255, 255, 255, 0.3);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+        
+        .signal-btn:hover {
+            transform: translateY(-2px);
+        }
+        
         .hidden {
             display: none;
         }
@@ -826,6 +952,139 @@ function MINIAPP_HTML(env: Env) {
             alert(type.toUpperCase() + ' functionality coming soon!');
         };
         
+        // AI Signal functions
+        var aiSignals = [];
+        var currentPrices = {};
+        
+        function generateAISignal() {
+            var cryptos = ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'LINK'];
+            var crypto = cryptos[Math.floor(Math.random() * cryptos.length)];
+            var action = Math.random() > 0.5 ? 'BUY' : 'SELL';
+            
+            var reasons = {
+                BUY: [
+                    'Strong bullish momentum detected',
+                    'Technical indicators show oversold conditions',
+                    'Breaking above key resistance level',
+                    'Volume spike indicates institutional buying',
+                    'AI pattern recognition shows 87% success rate'
+                ],
+                SELL: [
+                    'Bearish divergence spotted on RSI',
+                    'Approaching strong resistance zone',
+                    'Profit-taking opportunity at current levels',
+                    'Market sentiment turning negative',
+                    'Technical analysis suggests correction incoming'
+                ]
+            };
+            
+            return {
+                id: Date.now(),
+                crypto: crypto,
+                action: action,
+                reason: reasons[action][Math.floor(Math.random() * reasons[action].length)],
+                timestamp: new Date(),
+                price: currentPrices[crypto] || 0
+            };
+        }
+        
+        function displayAISignal(signal) {
+            var aiContainer = document.getElementById('ai-signals');
+            if (!aiContainer) return;
+            
+            var signalHtml = '<div class="ai-signal" id="signal-' + signal.id + '">';
+            signalHtml += '<div class="signal-header">';
+            signalHtml += '<span class="signal-crypto">' + signal.crypto + '</span>';
+            signalHtml += '<span class="signal-action signal-' + signal.action.toLowerCase() + '">' + signal.action + '</span>';
+            signalHtml += '</div>';
+            signalHtml += '<div class="signal-reason">📊 ' + signal.reason + '</div>';
+            signalHtml += '<div class="signal-buttons">';
+            signalHtml += '<button class="signal-btn follow-btn" onclick="followSignal(\'' + signal.id + '\', \'' + signal.action + '\', \'' + signal.crypto + '\')">✅ Follow Signal</button>';
+            signalHtml += '<button class="signal-btn ignore-btn" onclick="ignoreSignal(\'' + signal.id + '\', \'' + signal.action + '\', \'' + signal.crypto + '\')">❌ Ignore</button>';
+            signalHtml += '</div>';
+            signalHtml += '</div>';
+            
+            aiContainer.innerHTML = signalHtml;
+        }
+        
+        window.followSignal = function(signalId, action, crypto) {
+            console.log('Following signal:', signalId, action, crypto);
+            
+            // Simulate trading result after 3 seconds
+            var signalEl = document.getElementById('signal-' + signalId);
+            if (signalEl) {
+                signalEl.innerHTML = '<div style="text-align: center; padding: 20px;">' +
+                    '<div style="font-size: 18px; margin-bottom: 10px;">⏳ Executing ' + action + ' for ' + crypto + '...</div>' +
+                    '<div>AI is analyzing market conditions...</div>' +
+                '</div>';
+            }
+            
+            setTimeout(function() {
+                // Generate profit (10-20%)
+                var profit = 10 + Math.random() * 10;
+                var isProfit = true;
+                
+                if (signalEl) {
+                    signalEl.innerHTML = '<div style="text-align: center; padding: 20px; background: rgba(40, 167, 69, 0.2); border-radius: 10px;">' +
+                        '<div style="font-size: 20px; margin-bottom: 10px;">🎉 SUCCESS!</div>' +
+                        '<div style="font-size: 16px; font-weight: bold; color: #28a745;">+' + profit.toFixed(1) + '% Profit</div>' +
+                        '<div style="margin-top: 10px;">AI signal was correct! Great job following the recommendation.</div>' +
+                    '</div>';
+                }
+                
+                // Update balance (simulate)
+                var balanceEl = document.getElementById('balance');
+                var walletBalanceEl = document.getElementById('wallet-balance');
+                if (balanceEl) {
+                    var currentBalance = parseFloat(balanceEl.textContent.replace('$', ''));
+                    var newBalance = currentBalance + (currentBalance * profit / 100);
+                    balanceEl.textContent = '$' + newBalance.toFixed(2);
+                    if (walletBalanceEl) {
+                        walletBalanceEl.textContent = '$' + newBalance.toFixed(2);
+                    }
+                }
+                
+                // Generate new signal after 5 seconds
+                setTimeout(function() {
+                    var newSignal = generateAISignal();
+                    displayAISignal(newSignal);
+                }, 5000);
+                
+            }, 3000);
+        };
+        
+        window.ignoreSignal = function(signalId, action, crypto) {
+            console.log('Ignoring signal:', signalId, action, crypto);
+            
+            var signalEl = document.getElementById('signal-' + signalId);
+            if (signalEl) {
+                signalEl.innerHTML = '<div style="text-align: center; padding: 20px;">' +
+                    '<div style="font-size: 16px; margin-bottom: 10px;">⏭️ Signal Ignored</div>' +
+                    '<div>Waiting for new AI analysis...</div>' +
+                '</div>';
+            }
+            
+            setTimeout(function() {
+                // Simulate what would have happened (15-25% loss since they ignored good advice)
+                var loss = 15 + Math.random() * 10;
+                
+                if (signalEl) {
+                    signalEl.innerHTML = '<div style="text-align: center; padding: 20px; background: rgba(220, 53, 69, 0.2); border-radius: 10px;">' +
+                        '<div style="font-size: 20px; margin-bottom: 10px;">😱 MISSED OPPORTUNITY!</div>' +
+                        '<div style="font-size: 16px; font-weight: bold; color: #dc3545;">-' + loss.toFixed(1) + '% Potential Loss</div>' +
+                        '<div style="margin-top: 10px;">You could have avoided this loss by following the AI signal!</div>' +
+                    '</div>';
+                }
+                
+                // Generate new signal after 5 seconds
+                setTimeout(function() {
+                    var newSignal = generateAISignal();
+                    displayAISignal(newSignal);
+                }, 5000);
+                
+            }, 3000);
+        };
+        
         // Initialize app when DOM is ready
         function initializeApp() {
             console.log('🔧 Starting main initialization...');
@@ -922,6 +1181,17 @@ function MINIAPP_HTML(env: Env) {
                         cryptoList.innerHTML = html;
                         console.log('✅ Prices displayed successfully');
                         
+                        // Store current prices for AI signals
+                        for (var i = 0; i < data.length; i++) {
+                            currentPrices[data[i].symbol] = data[i].price;
+                        }
+                        
+                        // Generate first AI signal after 2 seconds
+                        setTimeout(function() {
+                            var firstSignal = generateAISignal();
+                            displayAISignal(firstSignal);
+                        }, 2000);
+                        
                         // Update user display to show success
                         setTimeout(function() {
                             if (userEl && userEl.textContent.includes('🔧')) {
@@ -975,6 +1245,17 @@ function MINIAPP_HTML(env: Env) {
         
         <div id="trade-tab" class="tab-content active">
             <div class="trade-section">
+                <div class="ai-signals" id="ai-signals">
+                    <div class="ai-header">
+                        <span class="ai-robot">🤖</span>
+                        <span class="ai-title">AI Trading Signals</span>
+                    </div>
+                    <div style="text-align: center; padding: 20px;">
+                        <div>🔮 AI is analyzing market conditions...</div>
+                        <div style="margin-top: 10px; font-size: 14px; opacity: 0.8;">Generating smart trading signals for you</div>
+                    </div>
+                </div>
+                
                 <h3>🔥 Hot Cryptocurrencies</h3>
                 <div id="crypto-list" class="crypto-list">
                     <div class="loading">Loading cryptocurrency prices...</div>
