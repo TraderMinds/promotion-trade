@@ -363,9 +363,9 @@ function MINIAPP_HTML(env: Env) {
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: rgb(102, 126, 234);
             min-height: 100vh;
-            color: #333;
+            color: rgb(51, 51, 51);
         }
         
         .container {
@@ -378,7 +378,7 @@ function MINIAPP_HTML(env: Env) {
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: rgb(102, 126, 234);
             color: white;
             padding: 20px;
             text-align: center;
@@ -640,29 +640,17 @@ function MINIAPP_HTML(env: Env) {
         .loading {
             text-align: center;
             padding: 50px 20px;
-            color: #6c757d;
+            color: rgb(108, 117, 125);
         }
         
         .ai-signals {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: rgb(102, 126, 234);
             color: white;
             padding: 20px;
             border-radius: 15px;
             margin-bottom: 20px;
             position: relative;
             overflow: hidden;
-        }
-        
-        .ai-signals::before {
-            content: \'\';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.1) 75%, transparent 75%, transparent);
-            background-size: 20px 20px;
-            animation: slide 2s linear infinite;
         }
         
         @keyframes slide {
@@ -1170,7 +1158,7 @@ function MINIAPP_HTML(env: Env) {
                             var crypto = data[i];
                             var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
                             var changeSymbol = crypto.change >= 0 ? '+' : '';
-                            html += '<div class="crypto-item" onclick="selectCrypto(\\\'' + crypto.symbol + '\\\')">';
+                            html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
                             html += '<div class="crypto-info">';
                             html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
                             html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
