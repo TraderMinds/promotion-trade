@@ -1,74 +1,829 @@
+import { jsonResponse, errorResponse, parseJsonSafe, validateRegisterPayload, generateRequestId, verifyTelegramInitData, rateLimit, logEvent } from './utils.js';
+import { incrementCounter } from './data/metrics.js';
+import { User } from './types.js';
+import { renderMiniApp } from './miniapp.js';
+import { getMiniAppClientScript } from './miniappClient.js';
+import { handleTelegramWebhook } from './telegram.js';
+import { handleTelegramUpdate } from './telegramBot.js';
+import { handleTrade } from './handlers/trade.js';
+import { getUserData, saveUserData } from './data/users.js';
+
 export interface Env {
   TRADING_KV: KVNamespace;
   BASE_URL: string;
   MINIAPP_URL: string;
   TELEGRAM_BOT_TOKEN: string;
   BOT_TOKEN_SECRET: string;
+  REQUIRE_INIT_FOR_TRADE?: string; // 'true' to enforce telegram init validation on /api/trade
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const requestId = generateRequestId();
     const url = new URL(request.url);
-    
-    // Set CORS headers
-    const corsHeaders = {
+  const method = request.method.toUpperCase();
+  const start = Date.now();
+
+    const corsHeaders: Record<string, string> = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-Id',
+      'Access-Control-Expose-Headers': 'X-Request-Id',
+      'X-Request-Id': requestId,
     };
 
-    // Handle CORS preflight
-    if (request.method === 'OPTIONS') {
+    if (method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Serve miniapp
-    if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
-      return serveMiniApp(url, env);
-    }
-
-    // API Routes
-    if (url.pathname.startsWith('/api/')) {
-      let response;
-      
-      if (url.pathname === '/api/prices') {
-        response = handlePrices();
-      } else if (url.pathname.startsWith('/api/user/register')) {
-        response = await handleUserRegister(request, env);
-      } else if (url.pathname.startsWith('/api/user/')) {
-        const userId = url.pathname.split('/')[3];
-        response = await handleGetUser(userId, env);
-      } else {
-        response = new Response('Not Found', { status: 404 });
+    try {
+      // Basic rate limiting (60 req/min per IP)
+      const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown';
+      const rl = await rateLimit(env as any, ip, 60, 60);
+      if (!rl.allowed) {
+        const retrySec = Math.max(0, Math.floor((rl.reset - Date.now()) / 1000));
+        const res = errorResponse('Rate limit exceeded. Try again later.', requestId, 429, 'RATE_LIMIT');
+        res.headers.set('Retry-After', retrySec.toString());
+        Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+        logEvent('rate.limit.block', { requestId, ip, path: url.pathname, method, remaining: rl.remaining, reset: rl.reset, latencyMs: Date.now()-start });
+        return res;
       }
-      
-      // Add CORS headers to all API responses
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
-      });
-      
-      return response;
-    }
+      // Attach rate limit headers for observability
+      corsHeaders['X-RateLimit-Limit'] = '60';
+      corsHeaders['X-RateLimit-Remaining'] = rl.remaining.toString();
+      corsHeaders['X-RateLimit-Reset'] = rl.reset.toString();
+      // Miniapp HTML
+      if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
+        const res = renderMiniApp(env);
+        // Metrics (fire & forget)
+        incrementCounter(env as any, 'miniapp.render');
+        logEvent('miniapp.render', { requestId, path: url.pathname, ip, latencyMs: Date.now()-start });
+        Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+        return res;
+      }
 
-    // Handle Telegram webhook
-    if (url.pathname === '/webhook' && request.method === 'POST') {
-      return handleTelegramWebhook(request, env);
-    }
+      // Admin Dashboard
+      if (url.pathname === '/admin' || url.pathname === '/admin/') {
+        const password = url.searchParams.get('password');
+        if (password !== '*Trader354638#') {
+          return new Response(renderAdminLogin(), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+          });
+        }
+        const res = await renderAdminDashboard(env);
+        incrementCounter(env as any, 'admin.access');
+        logEvent('admin.access', { requestId, ip, latencyMs: Date.now()-start });
+        Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+        return res;
+      }
 
-    return new Response('Not Found', { status: 404 });
+      // Telegram webhook (new bot system)
+      if (url.pathname === '/webhook' && method === 'POST') {
+        try {
+          const update = await request.json() as any;
+          const res = await handleTelegramUpdate(update, env);
+          incrementCounter(env as any, 'telegram.webhook');
+          logEvent('telegram.webhook', { requestId, status: res.status, latencyMs: Date.now()-start });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        } catch (error) {
+          console.error('[Worker] Webhook error:', error);
+          const res = new Response('OK', { status: 200 }); // Always return 200 to Telegram
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+      }
+
+      // API namespace
+      if (url.pathname.startsWith('/api/')) {
+        if (url.pathname === '/api/health' && method === 'GET') {
+          const started = (globalThis as any).__appStart || ((globalThis as any).__appStart = Date.now());
+          let kvOk = true;
+          try { await env.TRADING_KV.get('health_probe_dummy'); } catch { kvOk = false; }
+          const res = jsonResponse({
+            status: 'ok',
+            time: new Date().toISOString(),
+            uptimeMs: Date.now() - started,
+            kv: kvOk ? 'reachable' : 'error'
+          }, requestId);
+          incrementCounter(env as any, 'api.health');
+          logEvent('health.check', { requestId, kv: kvOk, latencyMs: Date.now()-start });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/prices' && method === 'GET') {
+          const res = handlePrices();
+          incrementCounter(env as any, 'api.prices');
+          logEvent('prices.get', { requestId, latencyMs: Date.now()-start });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/user/register' && method === 'POST') {
+          const initHeader = request.headers.get('X-Telegram-Init');
+          if (initHeader) {
+            const ok = await verifyTelegramInitData(initHeader, env.TELEGRAM_BOT_TOKEN);
+            if (!ok) {
+              const res = errorResponse('Invalid telegram init data', requestId, 401, 'UNAUTHORIZED');
+              Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+              logEvent('user.register.initdata.invalid', { requestId, ip, latencyMs: Date.now()-start });
+              return res;
+            }
+          }
+          const body = await parseJsonSafe<User>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          const val = validateRegisterPayload(body.value);
+          if (!val.ok) return errorResponse(val.error, requestId, 422, 'VALIDATION_ERROR');
+          // Per-user rate limit (registration) if id available
+          const perUserRl = await rateLimit(env as any, `user:${val.data.id}`, 30, 60);
+          if (!perUserRl.allowed) {
+            const res = errorResponse('User rate limit exceeded', requestId, 429, 'RATE_LIMIT_USER');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            logEvent('rate.limit.user.block', { requestId, userId: val.data.id, remaining: perUserRl.remaining, latencyMs: Date.now()-start });
+            return res;
+          }
+          // Add initial gift transaction if this is a new user
+          if (val.data.balance === 10.0 && (!val.data.transactions || val.data.transactions.length === 0)) {
+            const giftTransaction = {
+              id: 'gift_' + Date.now().toString(36),
+              type: 'ADJUSTMENT' as const,
+              amount: 10.0,
+              createdAt: new Date().toISOString(),
+              meta: { type: 'welcome_gift', description: 'Welcome gift bonus' }
+            };
+            val.data.transactions = [giftTransaction];
+          }
+          
+          await saveUserData(val.data.id, val.data, env);
+          const res = jsonResponse({ id: val.data.id, balance: val.data.balance, firstName: val.data.firstName }, requestId, 201);
+          incrementCounter(env as any, 'api.user.register');
+          logEvent('user.register.success', { requestId, userId: val.data.id, latencyMs: Date.now()-start });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname.startsWith('/api/user/') && url.pathname.endsWith('/balance') && method === 'GET') {
+          const userId = url.pathname.split('/')[3];
+          let user = await getUserData(parseInt(userId), env);
+          if (!user) {
+            // Initialize new user with default data
+            user = {
+              id: parseInt(userId),
+              balance: 10000, // Default demo balance
+              transactions: [
+                {
+                  id: 'init_' + Date.now(),
+                  type: 'ADJUSTMENT',
+                  amount: 10000,
+                  timestamp: new Date().toISOString(),
+                  status: 'APPROVED',
+                  description: 'Initial demo balance',
+                  metadata: { source: 'system_init' }
+                }
+              ],
+              trades: [],
+              settings: {},
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            await saveUserData(parseInt(userId), user, env);
+            logEvent('user.created', { userId: parseInt(userId) });
+          }
+          
+          // Calculate balance from all transaction sources (only approved deposits)
+          const deposits = user.transactions?.filter((t: any) => t.type === 'DEPOSIT' && t.meta?.status === 'approved').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const withdrawals = user.transactions?.filter((t: any) => t.type === 'WITHDRAW').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const adjustments = user.transactions?.filter((t: any) => t.type === 'ADJUSTMENT').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const tradePnL = user.transactions?.filter((t: any) => t.type === 'TRADE_PNL').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          
+          const calculatedBalance = deposits + withdrawals + adjustments + tradePnL;
+          
+          // Update user balance if different
+          if (Math.abs(user.balance - calculatedBalance) > 0.01) {
+            user.balance = calculatedBalance;
+            await saveUserData(user.id, user, env);
+          }
+          
+          const res = jsonResponse({ balance: user.balance, breakdown: { deposits, withdrawals, adjustments, tradePnL, total: calculatedBalance } }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname.startsWith('/api/user/') && method === 'GET') {
+          const userId = url.pathname.split('/')[3];
+          const user = await getUserData(parseInt(userId), env);
+          if (!user) {
+            const res = errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            logEvent('user.get.not_found', { requestId, userId, latencyMs: Date.now()-start });
+            return res;
+          }
+          // Per-user rate limit (read profile)
+          const perUserRl = await rateLimit(env as any, `user:${userId}`, 30, 60);
+          if (!perUserRl.allowed) {
+            const resRl = errorResponse('User rate limit exceeded', requestId, 429, 'RATE_LIMIT_USER');
+            Object.entries(corsHeaders).forEach(([k,v]) => resRl.headers.set(k,v));
+            logEvent('rate.limit.user.block', { requestId, userId, remaining: perUserRl.remaining, latencyMs: Date.now()-start });
+            return resRl;
+          }
+          const res = jsonResponse(user, requestId);
+          incrementCounter(env as any, 'api.user.get');
+          logEvent('user.get.success', { requestId, userId, latencyMs: Date.now()-start });
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname.startsWith('/api/user/') && url.pathname.endsWith('/transactions') && method === 'GET') {
+          const userId = url.pathname.split('/')[3];
+          const user = await getUserData(parseInt(userId), env);
+          if (!user) {
+            const res = errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Return all transactions sorted by date (newest first)
+          const allTransactions = (user.transactions || []).sort((a: any, b: any) => 
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          
+          const res = jsonResponse({ transactions: allTransactions, count: allTransactions.length }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/deposit' && method === 'POST') {
+          const body = await parseJsonSafe<{ userId: number, amount: number, txHash?: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, amount, txHash } = body.value;
+          if (!userId || typeof amount !== 'number' || amount <= 0) {
+            return errorResponse('Invalid deposit data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          // Create deposit transaction with approval workflow
+          const transaction = {
+            id: 'dep_' + Date.now().toString(36),
+            type: 'DEPOSIT' as const,
+            amount: amount,
+            createdAt: new Date().toISOString(),
+            timestamp: new Date().toISOString(),
+            status: 'UNDER_REVIEW', // Status: UNDER_REVIEW -> APPROVED/REJECTED
+            description: `Deposit request of $${amount.toFixed(2)} USDT`,
+            metadata: { 
+              txHash: txHash || null, 
+              paymentMethod: 'USDT',
+              submittedAt: new Date().toISOString(),
+              source: 'user_request',
+              reviewRequired: true
+            },
+            meta: { txHash: txHash || null, status: 'under_review' } // Keep for backward compatibility
+          };
+          
+          user.transactions = [...(user.transactions || []), transaction];
+          // Balance is NOT updated until admin approves the deposit
+          user.updated_at = new Date().toISOString();
+          
+          await saveUserData(user.id, user, env);
+          
+          const res = jsonResponse({ 
+            success: true, 
+            newBalance: user.balance, 
+            transaction, 
+            status: 'under_review',
+            message: 'Deposit request submitted and is under review. You will be notified once approved (usually within 24 hours).'
+          }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/withdraw' && method === 'POST') {
+          const body = await parseJsonSafe<{ userId: number, amount: number, address: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, amount, address } = body.value;
+          if (!userId || typeof amount !== 'number' || amount <= 0 || !address) {
+            return errorResponse('Invalid withdrawal data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          if (user.balance < amount) {
+            return errorResponse('Insufficient balance', requestId, 400, 'INSUFFICIENT_FUNDS');
+          }
+          
+          // Create withdrawal transaction with approval workflow
+          const transaction = {
+            id: 'wit_' + Date.now().toString(36),
+            type: 'WITHDRAW' as const,
+            amount: -amount, // negative for withdrawal (will be applied only after approval)
+            createdAt: new Date().toISOString(),
+            timestamp: new Date().toISOString(),
+            status: 'UNDER_REVIEW', // Status: UNDER_REVIEW -> PROCESSING -> COMPLETED/FAILED
+            description: `Withdrawal request of $${amount.toFixed(2)} to ${address.substring(0, 10)}...`,
+            metadata: { 
+              address,
+              submittedAt: new Date().toISOString(),
+              estimatedCompletion: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days
+              source: 'user_request',
+              reviewRequired: true
+            },
+            meta: { address, status: 'under_review' } // Keep for backward compatibility
+          };
+          
+          user.transactions = [...(user.transactions || []), transaction];
+          
+          // Balance is NOT updated until admin approves the withdrawal
+          // Only count approved transactions for balance calculation
+          const deposits = user.transactions.filter((t: any) => t.type === 'DEPOSIT' && (t.status === 'APPROVED' || t.meta?.status === 'approved')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const withdrawals = user.transactions.filter((t: any) => t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.status === 'COMPLETED')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const adjustments = user.transactions.filter((t: any) => t.type === 'ADJUSTMENT').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const tradePnL = user.transactions.filter((t: any) => t.type === 'TRADE_PNL').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          
+          user.balance = deposits + withdrawals + adjustments + tradePnL;
+          user.updated_at = new Date().toISOString();
+          
+          await saveUserData(user.id, user, env);
+          
+          const res = jsonResponse({ 
+            success: true, 
+            newBalance: user.balance, 
+            transaction,
+            status: 'under_review',
+            message: 'Withdrawal request submitted and is under review. You will be notified once approved (usually within 24 hours).'
+          }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/approve-deposit' && method === 'POST') {
+          const body = await parseJsonSafe<{ userId: number, transactionId: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, transactionId } = body.value;
+          if (!userId || !transactionId) {
+            return errorResponse('Invalid approval data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          // Find and approve the transaction
+          const transaction = user.transactions?.find((t: any) => t.id === transactionId && t.type === 'DEPOSIT');
+          if (!transaction) {
+            return errorResponse('Transaction not found', requestId, 404, 'NOT_FOUND');
+          }
+          
+          if (transaction.status === 'APPROVED') {
+            return errorResponse('Transaction already approved', requestId, 400, 'ALREADY_APPROVED');
+          }
+          
+          if (transaction.status !== 'UNDER_REVIEW') {
+            return errorResponse('Can only approve transactions under review', requestId, 400, 'INVALID_STATUS');
+          }
+          
+          // Approve the transaction and add to balance
+          transaction.meta.status = 'approved'; // Keep for backward compatibility
+          transaction.status = 'APPROVED';
+          transaction.approvedAt = new Date().toISOString();
+          transaction.metadata = transaction.metadata || {};
+          transaction.metadata.approvedBy = 'admin';
+          transaction.metadata.approvalTimestamp = new Date().toISOString();
+          
+          // Recalculate balance from all transactions (now including this approved deposit)
+          const deposits = user.transactions.filter((t: any) => t.type === 'DEPOSIT' && (t.status === 'APPROVED' || t.meta?.status === 'approved')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const withdrawals = user.transactions.filter((t: any) => t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.status === 'COMPLETED')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const adjustments = user.transactions.filter((t: any) => t.type === 'ADJUSTMENT').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const tradePnL = user.transactions.filter((t: any) => t.type === 'TRADE_PNL').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          
+          user.balance = deposits + withdrawals + adjustments + tradePnL;
+          user.updated_at = new Date().toISOString();
+          
+          await saveUserData(user.id, user, env);
+          
+          const res = jsonResponse({ 
+            success: true, 
+            newBalance: user.balance, 
+            transaction,
+            message: `Deposit of $${transaction.amount.toFixed(2)} has been approved and added to balance.`
+          }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/approve-withdraw' && method === 'POST') {
+          const body = await parseJsonSafe<{ userId: number, transactionId: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, transactionId } = body.value;
+          if (!userId || !transactionId) {
+            return errorResponse('Invalid approval data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          // Find the withdrawal transaction
+          const transaction = user.transactions?.find((t: any) => t.id === transactionId && t.type === 'WITHDRAW');
+          if (!transaction) {
+            return errorResponse('Withdrawal transaction not found', requestId, 404, 'NOT_FOUND');
+          }
+          
+          if (transaction.status === 'PROCESSING') {
+            return errorResponse('Withdrawal already approved and processing', requestId, 400, 'ALREADY_APPROVED');
+          }
+          
+          if (transaction.status !== 'UNDER_REVIEW') {
+            return errorResponse('Can only approve withdrawals under review', requestId, 400, 'INVALID_STATUS');
+          }
+          
+          // Approve the withdrawal and deduct from balance
+          transaction.meta.status = 'processing'; // Keep for backward compatibility
+          transaction.status = 'PROCESSING';
+          transaction.approvedAt = new Date().toISOString();
+          transaction.metadata = transaction.metadata || {};
+          transaction.metadata.approvedBy = 'admin';
+          transaction.metadata.approvalTimestamp = new Date().toISOString();
+          
+          // Recalculate balance from all transactions (now deducting this approved withdrawal)
+          const deposits = user.transactions.filter((t: any) => t.type === 'DEPOSIT' && (t.status === 'APPROVED' || t.meta?.status === 'approved')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const withdrawals = user.transactions.filter((t: any) => t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.status === 'COMPLETED')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const adjustments = user.transactions.filter((t: any) => t.type === 'ADJUSTMENT').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          const tradePnL = user.transactions.filter((t: any) => t.type === 'TRADE_PNL').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
+          
+          user.balance = deposits + withdrawals + adjustments + tradePnL;
+          user.updated_at = new Date().toISOString();
+          
+          await saveUserData(user.id, user, env);
+          
+          const res = jsonResponse({ 
+            success: true, 
+            newBalance: user.balance, 
+            transaction,
+            message: `Withdrawal of $${Math.abs(transaction.amount).toFixed(2)} has been approved and is now processing.`
+          }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+        if (url.pathname === '/api/trade' && method === 'POST') {
+          const initHeader = request.headers.get('X-Telegram-Init');
+          const requireInit = env.REQUIRE_INIT_FOR_TRADE === 'true';
+          if (requireInit && !initHeader) {
+            const res = errorResponse('Telegram init required', requestId, 401, 'UNAUTHORIZED');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            logEvent('trade.init.missing', { requestId, latencyMs: Date.now()-start });
+            return res;
+          }
+          if (initHeader) {
+            const ok = await verifyTelegramInitData(initHeader, env.TELEGRAM_BOT_TOKEN);
+            if (!ok) {
+              const res = errorResponse('Invalid telegram init data', requestId, 401, 'UNAUTHORIZED');
+              Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+              logEvent('trade.init.invalid', { requestId, latencyMs: Date.now()-start });
+              return res;
+            }
+          }
+          return await handleTrade(request, env, requestId, corsHeaders, start);
+        }
+
+        // Admin API Endpoints
+        if (url.pathname === '/api/admin/users' && method === 'GET') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          const users = await getAllUsers(env);
+          const stats = await getAdminStats(env, users);
+          
+          const res = jsonResponse({ users, stats }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        if (url.pathname === '/api/admin/user/balance' && method === 'POST') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+
+          const body = await parseJsonSafe<{ userId: number, newBalance: number, reason?: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, newBalance, reason } = body.value;
+          if (!userId || newBalance == null) {
+            return errorResponse('Invalid balance update data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          const oldBalance = user.balance;
+          const adjustmentAmount = newBalance - oldBalance;
+          
+          // Create adjustment transaction
+          const adjustmentTransaction = {
+            id: 'adj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+            type: 'ADJUSTMENT',
+            amount: adjustmentAmount,
+            timestamp: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            status: 'APPROVED',
+            description: reason || 'Admin balance adjustment',
+            metadata: {
+              adminAction: true,
+              oldBalance,
+              newBalance,
+              source: 'admin_panel'
+            }
+          };
+          
+          user.balance = newBalance;
+          user.transactions = user.transactions || [];
+          user.transactions.push(adjustmentTransaction);
+          user.updated_at = new Date().toISOString();
+          
+          await saveUserData(userId, user, env);
+          logEvent('admin.balance.update', { userId, oldBalance, newBalance, adjustmentAmount });
+          
+          const res = jsonResponse({ success: true, user, adjustment: adjustmentTransaction }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        if (url.pathname === '/api/admin/user/status' && method === 'POST') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+
+          const body = await parseJsonSafe<{ userId: number, status: string, reason?: string }>(request);
+          if (!body.ok) return errorResponse(body.error, requestId, 400, 'BAD_JSON');
+          
+          const { userId, status, reason } = body.value;
+          if (!userId || !['active', 'blocked'].includes(status)) {
+            return errorResponse('Invalid status data', requestId, 422, 'VALIDATION_ERROR');
+          }
+          
+          const user = await getUserData(userId, env);
+          if (!user) return errorResponse('User not found', requestId, 404, 'NOT_FOUND');
+          
+          const oldStatus = user.status || 'active';
+          user.status = status;
+          user.updated_at = new Date().toISOString();
+          
+          // Add status change to user history
+          user.statusHistory = user.statusHistory || [];
+          user.statusHistory.push({
+            timestamp: new Date().toISOString(),
+            oldStatus,
+            newStatus: status,
+            reason: reason || 'Admin action',
+            adminAction: true
+          });
+          
+          await saveUserData(userId, user, env);
+          logEvent('admin.status.change', { userId, oldStatus, newStatus: status, reason });
+          
+          const res = jsonResponse({ success: true, user }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        if (url.pathname === '/api/admin/deposits/pending' && method === 'GET') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          const allUsers = await getAllUsers(env);
+          const pendingDeposits: any[] = [];
+          
+          for (const user of allUsers) {
+            const deposits = (user.transactions || []).filter((t: any) => 
+              t.type === 'DEPOSIT' && t.meta?.status === 'pending'
+            );
+            
+            deposits.forEach((deposit: any) => {
+              pendingDeposits.push({
+                ...deposit,
+                user: {
+                  id: user.id,
+                  firstName: user.firstName,
+                  lastName: user.lastName,
+                  balance: user.balance
+                }
+              });
+            });
+          }
+          
+          // Sort by creation date (newest first)
+          pendingDeposits.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          
+          const res = jsonResponse({ deposits: pendingDeposits, count: pendingDeposits.length }, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        if (url.pathname === '/api/admin/system/stats' && method === 'GET') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          const users = await getAllUsers(env);
+          const stats = await getAdminStats(env, users);
+          
+          // Enhanced stats
+          const now = new Date();
+          const past24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          const past7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          
+          const enhancedStats = {
+            ...stats,
+            systemHealth: {
+              uptime: Date.now() - ((globalThis as any).__appStart || Date.now()),
+              memoryUsage: 'N/A', // Cloudflare Workers don't expose this
+              requestsToday: 0, // Would need to track in KV
+            },
+            userActivity: {
+              signupsLast24h: users.filter(u => new Date(u.created_at) >= past24h).length,
+              signupsLast7d: users.filter(u => new Date(u.created_at) >= past7d).length,
+              avgBalancePerUser: users.length > 0 ? stats.totalBalance / users.length : 0,
+            },
+            transactions: {
+              totalDeposits: users.reduce((sum, u) => {
+                return sum + ((u.transactions || []).filter((t: any) => t.type === 'DEPOSIT').length);
+              }, 0),
+              totalWithdrawals: users.reduce((sum, u) => {
+                return sum + ((u.transactions || []).filter((t: any) => t.type === 'WITHDRAW').length);
+              }, 0),
+              pendingDeposits: users.reduce((sum, u) => {
+                return sum + ((u.transactions || []).filter((t: any) => 
+                  t.type === 'DEPOSIT' && t.meta?.status === 'pending'
+                ).length);
+              }, 0)
+            }
+          };
+          
+          const res = jsonResponse(enhancedStats, requestId);
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        // Reject deposit
+        if (url.pathname === '/api/admin/reject-deposit' && method === 'POST') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          logEvent('api.admin.reject_deposit', { requestId });
+          const body = await request.json() as { depositId: string; reason?: string };
+          if (!body?.depositId) {
+            const res = errorResponse('Missing depositId', requestId, 400, 'INVALID_REQUEST');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Get deposit to verify it exists and is in correct status
+          const depositKey = `deposit:${body.depositId}`;
+          const deposit = await env.TRADING_KV.get(depositKey, 'json') as any;
+          if (!deposit) {
+            const res = errorResponse('Deposit not found', requestId, 404, 'DEPOSIT_NOT_FOUND');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          if (deposit.status !== 'UNDER_REVIEW') {
+            const res = errorResponse('Can only reject deposits under review', requestId, 400, 'INVALID_STATUS');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Update deposit status to rejected
+          deposit.status = 'REJECTED';
+          deposit.rejectedAt = Date.now();
+          deposit.rejectedBy = 'admin';
+          deposit.rejectionReason = body.reason || 'Rejected by admin';
+          
+          await env.TRADING_KV.put(depositKey, JSON.stringify(deposit));
+          
+          logEvent('admin.deposit_rejected', { requestId, depositId: body.depositId, reason: body.reason });
+          
+          const res = new Response(JSON.stringify({ 
+            success: true, 
+            message: 'Deposit rejected successfully'
+          }), { 
+            status: 200, 
+            headers: { 'Content-Type': 'application/json' } 
+          });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        // Complete withdrawal
+        if (url.pathname === '/api/admin/complete-withdrawal' && method === 'POST') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          logEvent('api.admin.complete_withdrawal', { requestId });
+          const body = await request.json() as { withdrawalId: string; txHash?: string };
+          if (!body?.withdrawalId) {
+            const res = errorResponse('Missing withdrawalId', requestId, 400, 'INVALID_REQUEST');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Get withdrawal to verify it exists and is in correct status
+          const withdrawalKey = `withdrawal:${body.withdrawalId}`;
+          const withdrawal = await env.TRADING_KV.get(withdrawalKey, 'json') as any;
+          if (!withdrawal) {
+            const res = errorResponse('Withdrawal not found', requestId, 404, 'WITHDRAWAL_NOT_FOUND');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          if (withdrawal.status !== 'APPROVED') {
+            const res = errorResponse('Can only complete approved withdrawals', requestId, 400, 'INVALID_STATUS');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Update withdrawal status to completed
+          withdrawal.status = 'COMPLETED';
+          withdrawal.completedAt = Date.now();
+          withdrawal.completedBy = 'admin';
+          withdrawal.txHash = body.txHash;
+          
+          await env.TRADING_KV.put(withdrawalKey, JSON.stringify(withdrawal));
+          
+          logEvent('admin.withdrawal_completed', { requestId, withdrawalId: body.withdrawalId, txHash: body.txHash });
+          
+          const res = new Response(JSON.stringify({ 
+            success: true, 
+            message: 'Withdrawal completed successfully'
+          }), { 
+            status: 200, 
+            headers: { 'Content-Type': 'application/json' } 
+          });
+          Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+          return res;
+        }
+
+        const nf = errorResponse('Not Found', requestId, 404, 'NOT_FOUND');
+        Object.entries(corsHeaders).forEach(([k,v]) => nf.headers.set(k,v));
+        logEvent('api.not_found', { requestId, path: url.pathname, method, latencyMs: Date.now()-start });
+        return nf;
+      }
+
+      // Serve /miniapp/app.js route delivering generated client script with appropriate headers.
+      if (url.pathname === '/miniapp/app.js' && method === 'GET') {
+        const js = getMiniAppClientScript(env.BASE_URL || '');
+        incrementCounter(env as any, 'miniapp.script');
+        const res = new Response(js, { status: 200, headers: { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' } });
+        Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+        logEvent('miniapp.script', { requestId, latencyMs: Date.now()-start });
+        return res;
+      }
+
+      const nf = new Response('Not Found', { status: 404, headers: corsHeaders });
+      logEvent('route.not_found', { requestId, path: url.pathname, method, latencyMs: Date.now()-start });
+      return nf;
+    } catch (e: any) {
+      console.error('❌ Unhandled error', e);
+      logEvent('unhandled.error', { requestId, message: e?.message, stack: e?.stack, latencyMs: Date.now()-start }, 'error');
+      const err = errorResponse('Internal Server Error', requestId, 500, 'INTERNAL');
+      Object.entries(corsHeaders).forEach(([k,v]) => err.headers.set(k,v));
+      return err;
+    }
   },
 };
 
 function handlePrices(): Response {
+  // Add small random volatility to real market prices (September 2025)
+  const baseTime = Date.now();
+  const btcBase = 112000 + (Math.sin(baseTime / 100000) * 3000);
+  const ethBase = 4170 + (Math.sin(baseTime / 80000) * 300);
+  const xauBase = 3780 + (Math.sin(baseTime / 120000) * 100);
+  
   const cryptoPrices = [
-    { symbol: 'BTC', name: 'Bitcoin', price: 45000, change: 2.5 },
-    { symbol: 'ETH', name: 'Ethereum', price: 3200, change: -1.2 },
-    { symbol: 'BNB', name: 'Binance Coin', price: 320, change: 0.8 },
-    { symbol: 'ADA', name: 'Cardano', price: 0.45, change: 3.2 },
-    { symbol: 'SOL', name: 'Solana', price: 98, change: -2.1 },
-    { symbol: 'DOT', name: 'Polkadot', price: 6.2, change: 1.5 },
-    { symbol: 'AVAX', name: 'Avalanche', price: 24, change: -0.5 },
-    { symbol: 'LINK', name: 'Chainlink', price: 14.5, change: 2.8 }
+    { 
+      symbol: 'BTC', 
+      name: 'Bitcoin', 
+      price: Math.round(btcBase + (Math.random() - 0.5) * 1000), 
+      change: (Math.random() - 0.5) * 6 
+    },
+    { 
+      symbol: 'ETH', 
+      name: 'Ethereum', 
+      price: Math.round(ethBase + (Math.random() - 0.5) * 150), 
+      change: (Math.random() - 0.5) * 5 
+    },
+    { 
+      symbol: 'XAU', 
+      name: 'Gold', 
+      price: Math.round(xauBase + (Math.random() - 0.5) * 80), 
+      change: (Math.random() - 0.5) * 3 
+    }
   ];
   
   return new Response(JSON.stringify(cryptoPrices), {
@@ -76,1232 +831,1262 @@ function handlePrices(): Response {
   });
 }
 
-async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
-  try {
-    const update = await request.json() as any;
-    console.log('📨 Received Telegram update:', JSON.stringify(update));
-    
-    // Handle text messages
-    if (update.message && update.message.text) {
-      const chatId = update.message.chat.id;
-      const userId = update.message.from.id;
-      const text = update.message.text;
-      const firstName = update.message.from.first_name || 'User';
-      
-      console.log(`📝 Message from ${firstName} (${userId}): ${text}`);
-      
-      if (text === '/start') {
-        // Register or get user data
-        const userData = await getUserData(userId, env);
-        
-        if (!userData) {
-          // Register new user
-          const newUserData = {
-            id: userId,
-            firstName: firstName,
-            lastName: update.message.from.last_name || '',
-            username: update.message.from.username || null,
-            languageCode: update.message.from.language_code || 'en',
-            balance: 10.00,
-            registered: true,
-            createdAt: new Date().toISOString(),
-            positions: [],
-            tradeHistory: [],
-            transactions: [],
-            totalTrades: 0,
-            winRate: 0
-          };
-          
-          await saveUserData(userId, newUserData, env);
-          
-          await sendTelegramMessage(chatId, 
-            `🎉 Welcome to TradeX Pro, ${firstName}!\n\n` +
-            `You've received a $10.00 welcome bonus!\n\n` +
-            `🚀 Start trading cryptocurrencies with our AI-powered bot.\n\n` +
-            `Click the button below to open the trading app:`,
-            {
-              reply_markup: {
-                inline_keyboard: [[
-                  {
-                    text: "🚀 Open TradeX Pro",
-                    web_app: { url: `${env.MINIAPP_URL}?user_id=${userId}&from_bot=1` }
-                  }
-                ]]
-              }
-            },
-            env
-          );
-        } else {
-          // Existing user
-          await sendTelegramMessage(chatId,
-            `👋 Welcome back, ${firstName}!\n\n` +
-            `💰 Your balance: $${userData.balance.toFixed(2)}\n` +
-            `📊 Total trades: ${userData.totalTrades || 0}\n` +
-            `🎯 Win rate: ${userData.winRate || 0}%\n\n` +
-            `Ready to continue trading?`,
-            {
-              reply_markup: {
-                inline_keyboard: [[
-                  {
-                    text: "🚀 Open TradeX Pro",
-                    web_app: { url: `${env.MINIAPP_URL}?user_id=${userId}&from_bot=1` }
-                  }
-                ]]
-              }
-            },
-            env
-          );
-        }
-      } else if (text === '/balance') {
-        const userData = await getUserData(userId, env);
-        if (userData) {
-          await sendTelegramMessage(chatId,
-            `💰 Your TradeX Pro Balance\n\n` +
-            `Balance: $${userData.balance.toFixed(2)}\n` +
-            `Total Trades: ${userData.totalTrades || 0}\n` +
-            `Win Rate: ${userData.winRate || 0}%\n\n` +
-            `Want to trade more?`,
-            {
-              reply_markup: {
-                inline_keyboard: [[
-                  {
-                    text: "🚀 Open TradeX Pro",
-                    web_app: { url: `${env.MINIAPP_URL}?user_id=${userId}&from_bot=1` }
-                  }
-                ]]
-              }
-            },
-            env
-          );
-        } else {
-          await sendTelegramMessage(chatId, "❌ User not found. Please send /start first.", {}, env);
-        }
-      } else if (text === '/help') {
-        await sendTelegramMessage(chatId,
-          `🤖 TradeX Pro Help\n\n` +
-          `Commands:\n` +
-          `/start - Start using the bot\n` +
-          `/balance - Check your balance\n` +
-          `/help - Show this help message\n\n` +
-          `🚀 Use the web app for full trading functionality!`,
-          {
-            reply_markup: {
-              inline_keyboard: [[
-                {
-                  text: "🚀 Open TradeX Pro",
-                  web_app: { url: `${env.MINIAPP_URL}?user_id=${userId}&from_bot=1` }
-                }
-              ]]
-            }
-          },
-          env
-        );
-      } else {
-        // Unknown command
-        await sendTelegramMessage(chatId,
-          `🤔 I don't understand that command.\n\n` +
-          `Try:\n` +
-          `/start - Get started\n` +
-          `/balance - Check balance\n` +
-          `/help - Get help\n\n` +
-          `Or use the web app for trading:`,
-          {
-            reply_markup: {
-              inline_keyboard: [[
-                {
-                  text: "🚀 Open TradeX Pro",
-                  web_app: { url: `${env.MINIAPP_URL}?user_id=${userId}&from_bot=1` }
-                }
-              ]]
-            }
-          },
-          env
-        );
-      }
-    }
-    
-    return new Response('OK');
-  } catch (error) {
-    console.error('❌ Error handling Telegram webhook:', error);
-    return new Response('Error', { status: 500 });
-  }
-}
-
-async function sendTelegramMessage(chatId: number, text: string, options: any = {}, env: Env): Promise<void> {
-  try {
-    const BOT_TOKEN = env.BOT_TOKEN_SECRET || env.TELEGRAM_BOT_TOKEN;
-    if (!BOT_TOKEN) {
-      console.error('❌ Bot token not found in environment variables');
-      return;
-    }
-    
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-    const payload = {
-      chat_id: chatId,
-      text: text,
-      parse_mode: 'HTML',
-      ...options
-    };
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Telegram API error:', errorText);
-    } else {
-      console.log('✅ Message sent successfully');
-    }
-  } catch (error) {
-    console.error('❌ Error sending Telegram message:', error);
-  }
-}
-
-async function handleUserRegister(request: Request, env: Env): Promise<Response> {
-  try {
-    const userData: any = await request.json();
-    console.log('Registering user:', userData);
-    
-    // Save user data to KV
-    await saveUserData(userData.id, userData, env);
-    
-    return new Response(JSON.stringify({ 
-      success: true, 
-      message: 'User registered successfully',
-      id: userData.id,
-      firstName: userData.firstName,
-      balance: userData.balance
-    }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: 'Registration failed' 
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
-
-async function handleGetUser(userId: string, env: Env): Promise<Response> {
-  try {
-    const userData = await getUserData(parseInt(userId), env);
-    
-    if (userData) {
-      return new Response(JSON.stringify(userData), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } else {
-      return new Response(JSON.stringify({ error: 'User not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-  } catch (error) {
-    console.error('Error getting user data:', error);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
-
-async function getUserData(userId: number, env: Env): Promise<any> {
-  try {
-    const userData = await env.TRADING_KV.get(`user:${userId}`);
-    return userData ? JSON.parse(userData) : null;
-  } catch (error) {
-    console.error('Error getting user data:', error);
-    return null;
-  }
-}
-
-async function saveUserData(userId: number, userData: any, env: Env): Promise<void> {
-  try {
-    await env.TRADING_KV.put(`user:${userId}`, JSON.stringify(userData));
-  } catch (error) {
-    console.error('Error saving user data:', error);
-  }
-}
-
-function serveMiniApp(url: URL, env: Env): Response {
-  if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
-    return new Response(MINIAPP_HTML(env), { 
-      headers: { 
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': "default-src 'self' https:; script-src 'self' 'unsafe-inline' https://telegram.org https://cdn.jsdelivr.net; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:"
-      } 
-    });
-  }
-  return new Response('Not Found', { status: 404 });
-}
-
-function MINIAPP_HTML(env: Env) {
-  const baseUrl = env.BASE_URL || 'https://promotion-trade-bot.tradermindai.workers.dev';
-  console.log('Server-side baseUrl:', baseUrl);
-  
+// Admin Dashboard Functions
+function renderAdminLogin(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TradeX Pro - AI Trading Bot</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: rgb(102, 126, 234);
-            min-height: 100vh;
-            color: rgb(51, 51, 51);
-        }
-        
-        .container {
-            max-width: 400px;
-            margin: 0 auto;
-            background: white;
-            min-height: 100vh;
-            position: relative;
-            overflow-x: hidden;
-        }
-        
-        .header {
-            background: rgb(102, 126, 234);
-            color: white;
-            padding: 20px;
-            text-align: center;
-            position: relative;
-        }
-        
-        .header h1 {
-            font-size: 24px;
-            margin-bottom: 5px;
-        }
-        
-        .header .subtitle {
-            font-size: 14px;
-            opacity: 0.9;
-        }
-        
-        .user-info {
-            background: rgba(255, 255, 255, 0.1);
-            margin: 15px 0 0 0;
-            padding: 15px;
-            border-radius: 10px;
-            backdrop-filter: blur(10px);
-        }
-        
-        .balance-section {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 10px;
-        }
-        
-        .balance {
-            font-size: 20px;
-            font-weight: bold;
-        }
-        
-        .nav-tabs {
-            display: flex;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-        
-        .nav-tab {
-            flex: 1;
-            padding: 15px 10px;
-            text-align: center;
-            background: none;
-            border: none;
-            font-size: 14px;
-            color: #6c757d;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: 500;
-        }
-        
-        .nav-tab.active {
-            color: #667eea;
-            background: white;
-            border-bottom: 2px solid #667eea;
-        }
-        
-        .nav-tab:hover {
-            background: #e9ecef;
-        }
-        
-        .tab-content {
-            display: none;
-            padding: 20px;
-            min-height: calc(100vh - 200px);
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        .crypto-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .crypto-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            border: 1px solid #e9ecef;
-        }
-        
-        .crypto-item:hover {
-            background: #e9ecef;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        
-        .crypto-info {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        
-        .crypto-name {
-            font-weight: 600;
-            font-size: 16px;
-        }
-        
-        .crypto-price {
-            font-size: 14px;
-            color: #6c757d;
-        }
-        
-        .crypto-change {
-            font-weight: bold;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        
-        .crypto-change.positive {
-            color: #28a745;
-            background: #d4edda;
-        }
-        
-        .crypto-change.negative {
-            color: #dc3545;
-            background: #f8d7da;
-        }
-        
-        .trade-section {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        
-        .trade-buttons {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .trade-btn {
-            flex: 1;
-            padding: 15px;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .buy-btn {
-            background: #28a745;
-            color: white;
-        }
-        
-        .buy-btn:hover {
-            background: #218838;
-        }
-        
-        .sell-btn {
-            background: #dc3545;
-            color: white;
-        }
-        
-        .sell-btn:hover {
-            background: #c82333;
-        }
-        
-        .wallet-section {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        
-        .wallet-card {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #e9ecef;
-        }
-        
-        .wallet-balance {
-            font-size: 24px;
-            font-weight: bold;
-            color: #28a745;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .wallet-actions {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .wallet-btn {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .deposit-btn {
-            background: #28a745;
-            color: white;
-        }
-        
-        .withdraw-btn {
-            background: #6c757d;
-            color: white;
-        }
-        
-        .portfolio-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            margin-bottom: 10px;
-            border: 1px solid #e9ecef;
-        }
-        
-        .portfolio-info h4 {
-            margin: 0;
-            font-size: 16px;
-        }
-        
-        .portfolio-info p {
-            margin: 5px 0 0 0;
-            color: #6c757d;
-            font-size: 14px;
-        }
-        
-        .portfolio-value {
-            text-align: right;
-        }
-        
-        .portfolio-value .amount {
-            font-weight: bold;
-            font-size: 16px;
-        }
-        
-        .portfolio-value .change {
-            font-size: 14px;
-            margin-top: 5px;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 50px 20px;
-            color: rgb(108, 117, 125);
-        }
-        
-        .ai-signals {
-            background: rgb(102, 126, 234);
-            color: white;
-            padding: 20px;
-            border-radius: 15px;
-            margin-bottom: 20px;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        @keyframes slide {
-            0% { transform: translateX(-20px); }
-            100% { transform: translateX(0); }
-        }
-        
-        .ai-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 15px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .ai-robot {
-            font-size: 24px;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        .ai-title {
-            font-size: 18px;
-            font-weight: bold;
-        }
-        
-        .ai-signal {
-            background: rgba(255, 255, 255, 0.15);
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 10px;
-            position: relative;
-            z-index: 1;
-            backdrop-filter: blur(10px);
-        }
-        
-        .signal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        
-        .signal-crypto {
-            font-weight: bold;
-            font-size: 16px;
-        }
-        
-        .signal-action {
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        
-        .signal-buy {
-            background: #28a745;
-            color: white;
-        }
-        
-        .signal-sell {
-            background: #dc3545;
-            color: white;
-        }
-        
-        .signal-reason {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-bottom: 10px;
-        }
-        
-        .signal-buttons {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .signal-btn {
-            flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 8px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .follow-btn {
-            background: rgba(255, 255, 255, 0.9);
-            color: #333;
-        }
-        
-        .ignore-btn {
-            background: rgba(255, 255, 255, 0.3);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.5);
-        }
-        
-        .signal-btn:hover {
-            transform: translateY(-2px);
-        }
-        
-        .hidden {
-            display: none;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login - TradeX Pro</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-container {
+      background: white;
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+    }
+    .login-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 30px;
+    }
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .input-group input {
+      width: 100%;
+      padding: 15px;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 16px;
+      transition: border-color 0.3s ease;
+    }
+    .input-group input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .login-btn {
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      color: white;
+      padding: 15px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+    .login-btn:hover {
+      transform: translateY(-2px);
+    }
+  </style>
 </head>
 <body>
-    <script>
-        console.log('✅ SCRIPT STARTED');
-        
-        // Base URL for API calls  
-        var API_BASE = '${baseUrl}';
-        console.log('🌐 API_BASE set to:', API_BASE);
-        
-        // Debug function to show what's happening
-        function showDebug(message) {
-            console.log('🔧 DEBUG:', message);
-            var userEl = document.getElementById('userType');
-            if (userEl) {
-                userEl.textContent = '🔧 ' + message;
-                userEl.style.color = '#FFA500';
-            }
-        }
-        
-        // Extract real user data from Telegram WebApp
-        function getUserFromTelegram() {
-            try {
-                var urlParams = new URLSearchParams(window.location.search);
-                var userId = urlParams.get('user_id');
-                var fromBot = urlParams.get('from_bot') === '1';
-                
-                var telegramUser = null;
-                if (typeof window.Telegram !== 'undefined' && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe) {
-                    telegramUser = window.Telegram.WebApp.initDataUnsafe.user;
-                }
-                
-                console.log('🔍 User detection:', {
-                    userId: userId,
-                    fromBot: fromBot,
-                    telegramUser: telegramUser
-                });
-                
-                if (telegramUser || userId) {
-                    return {
-                        id: telegramUser ? telegramUser.id : userId,
-                        firstName: telegramUser ? telegramUser.first_name : (userId === '8403188272' ? 'Tayden' : 'User'),
-                        lastName: telegramUser ? telegramUser.last_name : '',
-                        username: telegramUser ? telegramUser.username : null,
-                        languageCode: telegramUser ? telegramUser.language_code : 'en',
-                        fromBot: fromBot
-                    };
-                }
-                
-                return null;
-            } catch (e) {
-                console.error('❌ Error extracting user data:', e);
-                showDebug('Error extracting user: ' + e.message);
-                return null;
-            }
-        }
-        
-        // Load user data from backend
-        function loadUserData(userId) {
-            console.log('👤 Loading user data for ID:', userId);
-            showDebug('Loading user data...');
-            return fetch(API_BASE + '/api/user/' + userId)
-                .then(function(response) {
-                    if (response.ok) {
-                        return response.json();
-                    } else {
-                        console.log('ℹ️ User not found, needs registration');
-                        return null;
-                    }
-                })
-                .then(function(userData) {
-                    console.log('✅ User data loaded:', userData);
-                    return userData;
-                })
-                .catch(function(e) {
-                    console.error('❌ Error loading user data:', e);
-                    showDebug('Error loading user: ' + e.message);
-                    return null;
-                });
-        }
-        
-        // Register new user
-        function registerUser(telegramUser) {
-            console.log('📝 Registering new user:', telegramUser);
-            showDebug('Registering user...');
-            var userData = {
-                id: telegramUser.id,
-                firstName: telegramUser.firstName,
-                lastName: telegramUser.lastName,
-                username: telegramUser.username,
-                languageCode: telegramUser.languageCode,
-                balance: 10.00,
-                registered: true,
-                createdAt: new Date().toISOString()
-            };
-            
-            return fetch(API_BASE + '/api/user/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(userData)
-            })
-            .then(function(response) {
-                if (response.ok) {
-                    return response.json();
-                } else {
-                    throw new Error('Registration failed');
-                }
-            })
-            .then(function(result) {
-                console.log('✅ User registered successfully:', result);
-                return result;
-            })
-            .catch(function(e) {
-                console.error('❌ Error registering user:', e);
-                showDebug('Error registering: ' + e.message);
-                return null;
-            });
-        }
-        
-        // Global functions for UI
-        window.showTab = function(tabName) {
-            console.log('🔄 Tab clicked:', tabName);
-            showDebug('Switching to ' + tabName + ' tab');
-            
-            // Hide all tabs
-            var tabs = ['trade', 'portfolio', 'wallet', 'history'];
-            for (var i = 0; i < tabs.length; i++) {
-                var tabEl = document.getElementById(tabs[i] + '-tab');
-                if (tabEl) {
-                    tabEl.classList.remove('active');
-                }
-            }
-            
-            // Remove active from nav tabs
-            var navTabs = document.querySelectorAll('.nav-tab');
-            for (var i = 0; i < navTabs.length; i++) {
-                navTabs[i].classList.remove('active');
-            }
-            
-            // Show selected tab
-            var selectedTab = document.getElementById(tabName + '-tab');
-            if (selectedTab) {
-                selectedTab.classList.add('active');
-            }
-            
-            // Activate corresponding nav button
-            for (var i = 0; i < navTabs.length; i++) {
-                var btn = navTabs[i];
-                if (btn.onclick && btn.onclick.toString().includes("'" + tabName + "'")) {
-                    btn.classList.add('active');
-                    break;
-                }
-            }
-            
-            showDebug('Tab switched to: ' + tabName);
-        };
-        
-        window.selectCrypto = function(symbol) {
-            console.log('🎯 Selected crypto:', symbol);
-            alert('Selected ' + symbol + '! Trading functionality coming soon.');
-        };
-        
-        window.showDeposit = function() {
-            var amount = prompt('Enter deposit amount:');
-            if (amount && !isNaN(amount) && parseFloat(amount) > 0) {
-                alert('Deposit functionality coming soon! Amount: $' + parseFloat(amount).toFixed(2));
-            }
-        };
-        
-        window.showWithdraw = function() {
-            var amount = prompt('Enter withdrawal amount:');
-            if (amount && !isNaN(amount) && parseFloat(amount) > 0) {
-                alert('Withdrawal functionality coming soon! Amount: $' + parseFloat(amount).toFixed(2));
-            }
-        };
-        
-        window.executeTrade = function(type) {
-            alert(type.toUpperCase() + ' functionality coming soon!');
-        };
-        
-        // AI Signal functions
-        var aiSignals = [];
-        var currentPrices = {};
-        
-        function generateAISignal() {
-            var cryptos = ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'LINK'];
-            var crypto = cryptos[Math.floor(Math.random() * cryptos.length)];
-            var action = Math.random() > 0.5 ? 'BUY' : 'SELL';
-            
-            var reasons = {
-                BUY: [
-                    'Strong bullish momentum detected',
-                    'Technical indicators show oversold conditions',
-                    'Breaking above key resistance level',
-                    'Volume spike indicates institutional buying',
-                    'AI pattern recognition shows 87% success rate'
-                ],
-                SELL: [
-                    'Bearish divergence spotted on RSI',
-                    'Approaching strong resistance zone',
-                    'Profit-taking opportunity at current levels',
-                    'Market sentiment turning negative',
-                    'Technical analysis suggests correction incoming'
-                ]
-            };
-            
-            return {
-                id: Date.now(),
-                crypto: crypto,
-                action: action,
-                reason: reasons[action][Math.floor(Math.random() * reasons[action].length)],
-                timestamp: new Date(),
-                price: currentPrices[crypto] || 0
-            };
-        }
-        
-        function displayAISignal(signal) {
-            var aiContainer = document.getElementById('ai-signals');
-            if (!aiContainer) return;
-            
-            var signalHtml = '<div class="ai-signal" id="signal-' + signal.id + '">';
-            signalHtml += '<div class="signal-header">';
-            signalHtml += '<span class="signal-crypto">' + signal.crypto + '</span>';
-            signalHtml += '<span class="signal-action signal-' + signal.action.toLowerCase() + '">' + signal.action + '</span>';
-            signalHtml += '</div>';
-            signalHtml += '<div class="signal-reason">📊 ' + signal.reason + '</div>';
-            signalHtml += '<div class="signal-buttons">';
-            signalHtml += '<button class="signal-btn follow-btn" onclick="followSignal(\'' + signal.id + '\', \'' + signal.action + '\', \'' + signal.crypto + '\')">✅ Follow Signal</button>';
-            signalHtml += '<button class="signal-btn ignore-btn" onclick="ignoreSignal(\'' + signal.id + '\', \'' + signal.action + '\', \'' + signal.crypto + '\')">❌ Ignore</button>';
-            signalHtml += '</div>';
-            signalHtml += '</div>';
-            
-            aiContainer.innerHTML = signalHtml;
-        }
-        
-        window.followSignal = function(signalId, action, crypto) {
-            console.log('Following signal:', signalId, action, crypto);
-            
-            // Simulate trading result after 3 seconds
-            var signalEl = document.getElementById('signal-' + signalId);
-            if (signalEl) {
-                signalEl.innerHTML = '<div style="text-align: center; padding: 20px;">' +
-                    '<div style="font-size: 18px; margin-bottom: 10px;">⏳ Executing ' + action + ' for ' + crypto + '...</div>' +
-                    '<div>AI is analyzing market conditions...</div>' +
-                '</div>';
-            }
-            
-            setTimeout(function() {
-                // Generate profit (10-20%)
-                var profit = 10 + Math.random() * 10;
-                var isProfit = true;
-                
-                if (signalEl) {
-                    signalEl.innerHTML = '<div style="text-align: center; padding: 20px; background: rgba(40, 167, 69, 0.2); border-radius: 10px;">' +
-                        '<div style="font-size: 20px; margin-bottom: 10px;">🎉 SUCCESS!</div>' +
-                        '<div style="font-size: 16px; font-weight: bold; color: #28a745;">+' + profit.toFixed(1) + '% Profit</div>' +
-                        '<div style="margin-top: 10px;">AI signal was correct! Great job following the recommendation.</div>' +
-                    '</div>';
-                }
-                
-                // Update balance (simulate)
-                var balanceEl = document.getElementById('balance');
-                var walletBalanceEl = document.getElementById('wallet-balance');
-                if (balanceEl) {
-                    var currentBalance = parseFloat(balanceEl.textContent.replace('$', ''));
-                    var newBalance = currentBalance + (currentBalance * profit / 100);
-                    balanceEl.textContent = '$' + newBalance.toFixed(2);
-                    if (walletBalanceEl) {
-                        walletBalanceEl.textContent = '$' + newBalance.toFixed(2);
-                    }
-                }
-                
-                // Generate new signal after 5 seconds
-                setTimeout(function() {
-                    var newSignal = generateAISignal();
-                    displayAISignal(newSignal);
-                }, 5000);
-                
-            }, 3000);
-        };
-        
-        window.ignoreSignal = function(signalId, action, crypto) {
-            console.log('Ignoring signal:', signalId, action, crypto);
-            
-            var signalEl = document.getElementById('signal-' + signalId);
-            if (signalEl) {
-                signalEl.innerHTML = '<div style="text-align: center; padding: 20px;">' +
-                    '<div style="font-size: 16px; margin-bottom: 10px;">⏭️ Signal Ignored</div>' +
-                    '<div>Waiting for new AI analysis...</div>' +
-                '</div>';
-            }
-            
-            setTimeout(function() {
-                // Simulate what would have happened (15-25% loss since they ignored good advice)
-                var loss = 15 + Math.random() * 10;
-                
-                if (signalEl) {
-                    signalEl.innerHTML = '<div style="text-align: center; padding: 20px; background: rgba(220, 53, 69, 0.2); border-radius: 10px;">' +
-                        '<div style="font-size: 20px; margin-bottom: 10px;">😱 MISSED OPPORTUNITY!</div>' +
-                        '<div style="font-size: 16px; font-weight: bold; color: #dc3545;">-' + loss.toFixed(1) + '% Potential Loss</div>' +
-                        '<div style="margin-top: 10px;">You could have avoided this loss by following the AI signal!</div>' +
-                    '</div>';
-                }
-                
-                // Generate new signal after 5 seconds
-                setTimeout(function() {
-                    var newSignal = generateAISignal();
-                    displayAISignal(newSignal);
-                }, 5000);
-                
-            }, 3000);
-        };
-        
-        // Initialize app when DOM is ready
-        function initializeApp() {
-            console.log('🔧 Starting main initialization...');
-            showDebug('Initializing app...');
-            
-            var telegramUser = getUserFromTelegram();
-            console.log('👤 Telegram user:', telegramUser);
-            
-            var userEl = document.getElementById('userType');
-            var balanceEl = document.getElementById('balance');
-            
-            if (telegramUser && telegramUser.id) {
-                showDebug('Found user: ' + telegramUser.firstName);
-                
-                loadUserData(telegramUser.id).then(function(userData) {
-                    if (userData) {
-                        console.log('✅ Existing user found');
-                        if (userEl) {
-                            userEl.textContent = '👋 Welcome back, ' + userData.firstName + '!';
-                            userEl.style.color = '#4CAF50';
-                        }
-                        if (balanceEl) {
-                            balanceEl.textContent = '$' + (userData.balance || 10.00).toFixed(2);
-                        }
-                        var walletBalanceEl = document.getElementById('wallet-balance');
-                        if (walletBalanceEl) {
-                            walletBalanceEl.textContent = '$' + (userData.balance || 10.00).toFixed(2);
-                        }
-                    } else {
-                        console.log('🆕 New user, registering...');
-                        if (userEl) {
-                            userEl.textContent = '📝 Registering ' + telegramUser.firstName + '...';
-                            userEl.style.color = '#FFA500';
-                        }
-                        
-                        registerUser(telegramUser).then(function(registeredUser) {
-                            if (registeredUser) {
-                                if (userEl) {
-                                    userEl.textContent = '🎉 Welcome ' + registeredUser.firstName + '! $10 bonus added!';
-                                    userEl.style.color = '#4CAF50';
-                                }
-                                if (balanceEl) {
-                                    balanceEl.textContent = '$' + (registeredUser.balance || 10.00).toFixed(2);
-                                }
-                                var walletBalanceEl = document.getElementById('wallet-balance');
-                                if (walletBalanceEl) {
-                                    walletBalanceEl.textContent = '$' + (registeredUser.balance || 10.00).toFixed(2);
-                                }
-                            } else {
-                                if (userEl) {
-                                    userEl.textContent = '❌ Registration failed - Demo Mode';
-                                    userEl.style.color = '#f44336';
-                                }
-                            }
-                        });
-                    }
-                });
-            } else {
-                console.log('⚠️ No user data available, using demo mode');
-                showDebug('Demo mode - no user data');
-                if (userEl) {
-                    userEl.textContent = '👤 Demo Mode (No Telegram data)';
-                    userEl.style.color = '#888';
-                }
-            }
-            
-            // Load cryptocurrency prices
-            console.log('💰 Loading cryptocurrency prices...');
-            showDebug('Loading prices...');
-            fetch(API_BASE + '/api/prices')
-                .then(function(response) { 
-                    console.log('📥 Prices response:', response.status);
-                    return response.json(); 
-                })
-                .then(function(data) {
-                    console.log('✅ Prices loaded:', data.length, 'items');
-                    showDebug('Prices loaded: ' + data.length + ' cryptocurrencies');
-                    
-                    var cryptoList = document.getElementById('crypto-list');
-                    if (cryptoList) {
-                        var html = '';
-                        for (var i = 0; i < data.length; i++) {
-                            var crypto = data[i];
-                            var changeClass = crypto.change >= 0 ? 'positive' : 'negative';
-                            var changeSymbol = crypto.change >= 0 ? '+' : '';
-                            html += '<div class="crypto-item" onclick="selectCrypto(\'' + crypto.symbol + '\')">';
-                            html += '<div class="crypto-info">';
-                            html += '<div class="crypto-name">' + crypto.name + ' (' + crypto.symbol + ')</div>';
-                            html += '<div class="crypto-price">$' + crypto.price.toLocaleString() + '</div>';
-                            html += '</div>';
-                            html += '<div class="crypto-change ' + changeClass + '">' + changeSymbol + crypto.change + '%</div>';
-                            html += '</div>';
-                        }
-                        cryptoList.innerHTML = html;
-                        console.log('✅ Prices displayed successfully');
-                        
-                        // Store current prices for AI signals
-                        for (var i = 0; i < data.length; i++) {
-                            currentPrices[data[i].symbol] = data[i].price;
-                        }
-                        
-                        // Generate first AI signal after 2 seconds
-                        setTimeout(function() {
-                            var firstSignal = generateAISignal();
-                            displayAISignal(firstSignal);
-                        }, 2000);
-                        
-                        // Update user display to show success
-                        setTimeout(function() {
-                            if (userEl && userEl.textContent.includes('🔧')) {
-                                if (telegramUser && telegramUser.firstName) {
-                                    userEl.textContent = '👋 Welcome ' + telegramUser.firstName + '!';
-                                    userEl.style.color = '#4CAF50';
-                                } else {
-                                    userEl.textContent = '👤 Demo Mode';
-                                    userEl.style.color = '#888';
-                                }
-                            }
-                        }, 1000);
-                    }
-                })
-                .catch(function(error) {
-                    console.error('❌ Error loading prices:', error);
-                    showDebug('Error loading prices: ' + error.message);
-                });
-        }
-        
-        // Wait for DOM to load then initialize
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeApp);
-        } else {
-            // DOM already loaded
-            setTimeout(initializeApp, 100);
-        }
-        
-        console.log('✅ SCRIPT FULLY LOADED');
-    </script>
-
-    <div class="container">
-        <div class="header">
-            <h1>🚀 TradeX Pro</h1>
-            <p class="subtitle">AI-Powered Trading Bot</p>
-            <div class="user-info">
-                <div id="userType">Loading...</div>
-                <div class="balance-section">
-                    <span>Balance:</span>
-                    <span class="balance" id="balance">$10.00</span>
-                </div>
-            </div>
-        </div>
-        
-        <div class="nav-tabs">
-            <button class="nav-tab active" onclick="showTab('trade')">💹 Trade</button>
-            <button class="nav-tab" onclick="showTab('portfolio')">📊 Portfolio</button>
-            <button class="nav-tab" onclick="showTab('wallet')">💳 Wallet</button>
-            <button class="nav-tab" onclick="showTab('history')">📈 History</button>
-        </div>
-        
-        <div id="trade-tab" class="tab-content active">
-            <div class="trade-section">
-                <div class="ai-signals" id="ai-signals">
-                    <div class="ai-header">
-                        <span class="ai-robot">🤖</span>
-                        <span class="ai-title">AI Trading Signals</span>
-                    </div>
-                    <div style="text-align: center; padding: 20px;">
-                        <div>🔮 AI is analyzing market conditions...</div>
-                        <div style="margin-top: 10px; font-size: 14px; opacity: 0.8;">Generating smart trading signals for you</div>
-                    </div>
-                </div>
-                
-                <h3>🔥 Hot Cryptocurrencies</h3>
-                <div id="crypto-list" class="crypto-list">
-                    <div class="loading">Loading cryptocurrency prices...</div>
-                </div>
-                
-                <div class="trade-buttons">
-                    <button class="trade-btn buy-btn" onclick="executeTrade('buy')">🔥 BUY</button>
-                    <button class="trade-btn sell-btn" onclick="executeTrade('sell')">💰 SELL</button>
-                </div>
-            </div>
-        </div>
-        
-        <div id="portfolio-tab" class="tab-content">
-            <div class="portfolio-section">
-                <h3>📊 Your Portfolio</h3>
-                <div class="portfolio-item">
-                    <div class="portfolio-info">
-                        <h4>Bitcoin (BTC)</h4>
-                        <p>0.00045 BTC</p>
-                    </div>
-                    <div class="portfolio-value">
-                        <div class="amount">$20.25</div>
-                        <div class="change positive">+2.5%</div>
-                    </div>
-                </div>
-                <div class="portfolio-item">
-                    <div class="portfolio-info">
-                        <h4>Ethereum (ETH)</h4>
-                        <p>0.015 ETH</p>
-                    </div>
-                    <div class="portfolio-value">
-                        <div class="amount">$48.00</div>
-                        <div class="change negative">-1.2%</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div id="wallet-tab" class="tab-content">
-            <div class="wallet-section">
-                <h3>💳 Your Wallet</h3>
-                <div class="wallet-card">
-                    <div class="wallet-balance" id="wallet-balance">$10.00</div>
-                    <div class="wallet-actions">
-                        <button class="wallet-btn deposit-btn" onclick="showDeposit()">💰 Deposit</button>
-                        <button class="wallet-btn withdraw-btn" onclick="showWithdraw()">💸 Withdraw</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div id="history-tab" class="tab-content">
-            <div class="history-section">
-                <h3>📈 Trading History</h3>
-                <p style="text-align: center; color: #6c757d; padding: 50px;">No trades yet. Start trading to see your history!</p>
-            </div>
-        </div>
-    </div>
+  <div class="login-container">
+    <h1 class="login-title">🔐 Admin Access</h1>
+    <form class="login-form" onsubmit="handleLogin(event)">
+      <div class="input-group">
+        <input type="password" id="admin-password" placeholder="Enter admin password" required>
+      </div>
+      <button type="submit" class="login-btn">Access Dashboard</button>
+    </form>
+  </div>
+  
+  <script>
+    function handleLogin(event) {
+      event.preventDefault();
+      const password = document.getElementById('admin-password').value;
+      window.location.href = '/admin?password=' + encodeURIComponent(password);
+    }
+  </script>
 </body>
 </html>`;
 }
+
+async function renderAdminDashboard(env: Env): Promise<Response> {
+  // Fetch all users and statistics
+  const allUsers = await getAllUsers(env);
+  const stats = await getAdminStats(env, allUsers);
+  
+  // Get pending deposits (under review)
+  const pendingDeposits: any[] = [];
+  for (const user of allUsers) {
+    const deposits = (user.transactions || []).filter((t: any) => 
+      t.type === 'DEPOSIT' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'pending')
+    );
+    deposits.forEach((deposit: any) => {
+      pendingDeposits.push({
+        ...deposit,
+        user: {
+          id: user.id,
+          firstName: user.firstName || 'Unknown',
+          lastName: user.lastName || '',
+          balance: user.balance
+        }
+      });
+    });
+  }
+  pendingDeposits.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  // Get withdrawals awaiting approval (under review)
+  const pendingWithdrawals: any[] = [];
+  for (const user of allUsers) {
+    const withdrawals = (user.transactions || []).filter((t: any) => 
+      t.type === 'WITHDRAW' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'pending')
+    );
+    withdrawals.forEach((withdrawal: any) => {
+      pendingWithdrawals.push({
+        ...withdrawal,
+        user: {
+          id: user.id,
+          firstName: user.firstName || 'Unknown',
+          lastName: user.lastName || '',
+          balance: user.balance
+        }
+      });
+    });
+  }
+  pendingWithdrawals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  // Get approved withdrawals (ready to complete)
+  const approvedWithdrawals: any[] = [];
+  for (const user of allUsers) {
+    const withdrawals = (user.transactions || []).filter((t: any) => 
+      t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.meta?.status === 'approved')
+    );
+    withdrawals.forEach((withdrawal: any) => {
+      approvedWithdrawals.push({
+        ...withdrawal,
+        user: {
+          id: user.id,
+          firstName: user.firstName || 'Unknown',
+          lastName: user.lastName || '',
+          balance: user.balance
+        }
+      });
+    });
+  }
+  approvedWithdrawals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - TradeX Pro</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      line-height: 1.6;
+    }
+    .admin-container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .admin-header {
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      color: white;
+      padding: 30px;
+      border-radius: 15px;
+      margin-bottom: 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .admin-title {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 5px;
+    }
+    .admin-subtitle {
+      font-size: 16px;
+      opacity: 0.9;
+    }
+    .admin-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .header-btn {
+      background: rgba(255,255,255,0.2);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .header-btn:hover {
+      background: rgba(255,255,255,0.3);
+      transform: translateY(-1px);
+    }
+    .dashboard-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 0;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      padding: 15px 25px;
+      cursor: pointer;
+      font-weight: 600;
+      color: #64748b;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s ease;
+    }
+    .tab-btn.active {
+      color: #3b82f6;
+      border-bottom-color: #3b82f6;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .stat-card {
+      background: white;
+      padding: 25px;
+      border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      border: 1px solid #e5e7eb;
+    }
+    .stat-title {
+      font-size: 14px;
+      color: #64748b;
+      font-weight: 600;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    .stat-change {
+      font-size: 12px;
+      margin-top: 5px;
+    }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .users-section {
+      background: white;
+      border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    .section-header {
+      background: #f8fafc;
+      padding: 20px 25px;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .search-box {
+      padding: 8px 15px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .users-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .users-table th,
+    .users-table td {
+      padding: 15px 25px;
+      text-align: left;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .users-table th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: #64748b;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .users-table tr:hover {
+      background: #f8fafc;
+    }
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .user-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .user-details h4 {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .user-details span {
+      font-size: 12px;
+      color: #64748b;
+    }
+    .balance-amount {
+      font-weight: 600;
+      font-size: 16px;
+    }
+    .action-btn {
+      padding: 6px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+      margin-right: 5px;
+      transition: all 0.3s ease;
+    }
+    .action-btn:hover {
+      background: #f3f4f6;
+    }
+    .status-active { color: #10b981; font-weight: 600; }
+    .status-blocked { color: #ef4444; font-weight: 600; }
+    .refresh-btn {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: white;
+      border: none;
+      padding: 15px;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+      font-size: 18px;
+    }
+    .pending-deposits {
+      background: white;
+      border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
+      overflow: hidden;
+    }
+    .pending-item {
+      padding: 20px 25px;
+      border-bottom: 1px solid #f1f5f9;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .pending-item:last-child {
+      border-bottom: none;
+    }
+    .pending-info {
+      flex: 1;
+    }
+    .pending-user {
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+    .pending-amount {
+      font-size: 18px;
+      color: #10b981;
+      font-weight: 700;
+    }
+    .pending-date {
+      font-size: 12px;
+      color: #64748b;
+    }
+    .pending-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .approve-btn {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .approve-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    }
+    .reject-btn {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .reject-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal.active {
+      display: flex;
+    }
+    .modal-content {
+      background: white;
+      padding: 30px;
+      border-radius: 15px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .modal-header {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 20px;
+      color: #1e293b;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 600;
+      color: #374151;
+    }
+    .form-input {
+      width: 100%;
+      padding: 10px 15px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.3s ease;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .form-actions {
+      display: flex;
+      gap: 15px;
+      justify-content: flex-end;
+      margin-top: 30px;
+    }
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      color: white;
+    }
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #64748b;
+      border: 2px solid #e5e7eb;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+    .loading {
+      opacity: 0.7;
+      pointer-events: none;
+    }
+    .success-message, .error-message {
+      padding: 15px 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      font-weight: 600;
+    }
+    .success-message {
+      background: #d1fae5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+    }
+    .error-message {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fca5a5;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #64748b;
+    }
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+    }
+    @media (max-width: 768px) {
+      .admin-container { padding: 10px; }
+      .admin-header { padding: 20px; flex-direction: column; gap: 20px; text-align: center; }
+      .dashboard-tabs { overflow-x: auto; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .users-table { font-size: 14px; }
+      .users-table th, .users-table td { padding: 10px 15px; }
+      .pending-item { flex-direction: column; gap: 15px; align-items: flex-start; }
+      .modal-content { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="admin-container">
+    <div class="admin-header">
+      <div>
+        <h1 class="admin-title">⚡ Admin Dashboard</h1>
+        <p class="admin-subtitle">TradeX Pro Management Console</p>
+      </div>
+      <div class="admin-actions">
+        <button class="header-btn" onclick="refreshDashboard()">🔄 Refresh</button>
+        <button class="header-btn" onclick="exportData()">📊 Export</button>
+      </div>
+    </div>
+
+    <div class="dashboard-tabs">
+      <button class="tab-btn active" onclick="switchTab('overview')">📈 Overview</button>
+      <button class="tab-btn" onclick="switchTab('users')">👥 Users</button>
+      <button class="tab-btn" onclick="switchTab('deposits')">💰 Deposits</button>
+      <button class="tab-btn" onclick="switchTab('system')">⚙️ System</button>
+    </div>
+    
+    <!-- Overview Tab -->
+    <div id="overview-tab" class="tab-content active">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-title">Total Users</div>
+          <div class="stat-value">${stats.totalUsers}</div>
+          <div class="stat-change positive">+${stats.newUsersToday} today</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Total Balance</div>
+          <div class="stat-value">$${stats.totalBalance.toLocaleString()}</div>
+          <div class="stat-change">Across all accounts</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Total Trades</div>
+          <div class="stat-value">${stats.totalTrades}</div>
+          <div class="stat-change">All time</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Active Users</div>
+          <div class="stat-value">${stats.activeUsers}</div>
+          <div class="stat-change positive">Last 24h</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Pending Deposits</div>
+          <div class="stat-value">${pendingDeposits.length}</div>
+          <div class="stat-change ${pendingDeposits.length > 0 ? 'negative' : ''}">Awaiting approval</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Pending Withdrawals</div>
+          <div class="stat-value">${pendingWithdrawals.length}</div>
+          <div class="stat-change ${pendingWithdrawals.length > 0 ? 'negative' : ''}">Awaiting completion</div>
+        </div>
+      </div>
+      
+      ${pendingDeposits.length > 0 ? `
+      <div class="pending-deposits">
+        <div class="section-header">
+          <h2 class="section-title">🔔 Recent Pending Deposits</h2>
+        </div>
+        ${pendingDeposits.slice(0, 3).map(deposit => `
+          <div class="pending-item">
+            <div class="pending-info">
+              <div class="pending-user">${deposit.user.firstName} ${deposit.user.lastName} (ID: ${deposit.user.id})</div>
+              <div class="pending-amount">+$${deposit.amount.toFixed(2)} USDT</div>
+              <div class="pending-date">${new Date(deposit.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="pending-actions">
+              <button class="approve-btn" onclick="approveDeposit(${deposit.user.id}, '${deposit.id}')">✅ Approve</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ` : ''}
+    </div>
+    
+    <!-- Users Tab -->
+    <div id="users-tab" class="tab-content">
+      <div class="users-section">
+        <div class="section-header">
+          <h2 class="section-title">👥 User Management</h2>
+          <input type="text" class="search-box" placeholder="Search users..." onkeyup="searchUsers(this.value)">
+        </div>
+        
+        <table class="users-table" id="users-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Balance</th>
+            <th>Trades</th>
+            <th>P&L</th>
+            <th>Joined</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allUsers.map(user => `
+            <tr data-user-id="${user.id}">
+              <td>
+                <div class="user-info">
+                  <div class="user-avatar">${user.firstName.charAt(0).toUpperCase()}</div>
+                  <div class="user-details">
+                    <h4>${user.firstName} ${user.lastName || ''}</h4>
+                    <span>ID: ${user.id}</span>
+                  </div>
+                </div>
+              </td>
+              <td class="balance-amount">$${user.balance.toFixed(2)}</td>
+              <td>${user.trades || 0}</td>
+              <td class="${user.pnl >= 0 ? 'positive' : 'negative'}">
+                ${user.pnl >= 0 ? '+' : ''}$${user.pnl.toFixed(2)}
+              </td>
+              <td>${new Date(user.createdAt).toLocaleDateString()}</td>
+              <td class="${user.status === 'active' ? 'status-active' : 'status-blocked'}">
+                ${user.status || 'active'}
+              </td>
+              <td>
+                <button class="action-btn" onclick="viewUser('${user.id}')">View</button>
+                <button class="action-btn" onclick="editBalance('${user.id}', ${user.balance})">Edit Balance</button>
+                <button class="action-btn" onclick="toggleStatus('${user.id}', '${user.status || 'active'}')">
+                  ${user.status === 'blocked' ? 'Unblock' : 'Block'}
+                </button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <!-- Deposits Tab -->
+    <div id="deposits-tab" class="tab-content">
+      <div class="pending-deposits">
+        <div class="section-header">
+          <h2 class="section-title">💰 All Pending Deposits</h2>
+          <span class="stat-value">${pendingDeposits.length} pending</span>
+        </div>
+        ${pendingDeposits.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-state-icon">✅</div>
+            <div>No pending deposits</div>
+            <div style="font-size: 14px; margin-top: 10px; color: #64748b;">All deposits have been processed</div>
+          </div>
+        ` : pendingDeposits.map(deposit => `
+          <div class="pending-item">
+            <div class="pending-info">
+              <div class="pending-user">${deposit.user.firstName} ${deposit.user.lastName}</div>
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 5px;">User ID: ${deposit.user.id} | Current Balance: $${deposit.user.balance.toFixed(2)}</div>
+              <div class="pending-amount">+$${deposit.amount.toFixed(2)} USDT</div>
+              <div class="pending-date">${new Date(deposit.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="pending-actions">
+              <button class="approve-btn" onclick="approveDeposit(${deposit.user.id}, '${deposit.id}')">✅ Approve</button>
+              <button class="reject-btn" onclick="rejectDeposit(${deposit.user.id}, '${deposit.id}')">❌ Reject</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Pending Withdrawals Section (Awaiting Approval) -->
+      <div class="users-section">
+        <div class="section-header">
+          <h2 class="section-title">⏳ Withdrawals Awaiting Approval</h2>
+          <span class="stat-value">${pendingWithdrawals.length} awaiting approval</span>
+        </div>
+        ${pendingWithdrawals.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-state-icon">✅</div>
+            <div>No withdrawals pending approval</div>
+            <div style="font-size: 14px; margin-top: 10px; color: #64748b;">All withdrawal requests have been reviewed</div>
+          </div>
+        ` : pendingWithdrawals.map(withdrawal => `
+          <div class="pending-item">
+            <div class="pending-info">
+              <div class="pending-user">${withdrawal.user.firstName} ${withdrawal.user.lastName}</div>
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 5px;">
+                User ID: ${withdrawal.user.id} | Current Balance: $${withdrawal.user.balance.toFixed(2)}
+                <br>Address: ${withdrawal.metadata?.address || withdrawal.meta?.address || 'N/A'}
+              </div>
+              <div class="pending-amount" style="color: #dc2626;">$${Math.abs(withdrawal.amount).toFixed(2)} USDT</div>
+              <div class="pending-date">${new Date(withdrawal.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="pending-actions">
+              <button class="approve-btn" onclick="approveWithdrawal(${withdrawal.user.id}, '${withdrawal.id}')">✅ Approve</button>
+              <button class="reject-btn" onclick="rejectWithdrawal(${withdrawal.user.id}, '${withdrawal.id}')" style="background: #dc2626; margin-left: 10px;">❌ Reject</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Approved Withdrawals Section (Ready to Complete) -->
+      <div class="users-section">
+        <div class="section-header">
+          <h2 class="section-title">💸 Approved Withdrawals (Ready to Complete)</h2>
+          <span class="stat-value">${approvedWithdrawals.length} ready to complete</span>
+        </div>
+        ${approvedWithdrawals.length === 0 ? `
+          <div class="empty-state">
+            <div class="empty-state-icon">✅</div>
+            <div>No approved withdrawals pending</div>
+            <div style="font-size: 14px; margin-top: 10px; color: #64748b;">All approved withdrawals have been completed</div>
+          </div>
+        ` : approvedWithdrawals.map(withdrawal => `
+          <div class="pending-item">
+            <div class="pending-info">
+              <div class="pending-user">${withdrawal.user.firstName} ${withdrawal.user.lastName}</div>
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 5px;">
+                User ID: ${withdrawal.user.id} | Current Balance: $${withdrawal.user.balance.toFixed(2)}
+                <br>Address: ${withdrawal.metadata?.address || withdrawal.meta?.address || 'N/A'}
+              </div>
+              <div class="pending-amount" style="color: #dc2626;">$${Math.abs(withdrawal.amount).toFixed(2)} USDT</div>
+              <div class="pending-date">Approved: ${new Date(withdrawal.approvedAt || withdrawal.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="pending-actions">
+              <button class="approve-btn" onclick="completeWithdrawal('${withdrawal.id}')">✅ Complete</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- System Tab -->
+    <div id="system-tab" class="tab-content">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-title">Server Status</div>
+          <div class="stat-value positive">🟢 Online</div>
+          <div class="stat-change">Cloudflare Workers</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Database</div>
+          <div class="stat-value positive">🟢 Connected</div>
+          <div class="stat-change">KV Storage</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">API Health</div>
+          <div class="stat-value positive">🟢 Healthy</div>
+          <div class="stat-change">All endpoints responsive</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-title">Last Deploy</div>
+          <div class="stat-value">${new Date().toLocaleDateString()}</div>
+          <div class="stat-change">Auto-updated</div>
+        </div>
+      </div>
+      
+      <div class="users-section">
+        <div class="section-header">
+          <h2 class="section-title">⚙️ System Actions</h2>
+        </div>
+        <div style="padding: 30px;">
+          <div class="form-group">
+            <button class="btn btn-primary" onclick="exportUsers()">📊 Export All User Data</button>
+            <p style="font-size: 14px; color: #64748b; margin-top: 10px;">Download CSV file with all user information</p>
+          </div>
+          <div class="form-group">
+            <button class="btn btn-secondary" onclick="systemMaintenance()">🔧 System Maintenance</button>
+            <p style="font-size: 14px; color: #64748b; margin-top: 10px;">Perform system cleanup and optimization</p>
+          </div>
+          <div class="form-group">
+            <button class="btn btn-secondary" onclick="viewLogs()">📋 View System Logs</button>
+            <p style="font-size: 14px; color: #64748b; margin-top: 10px;">Access recent system activity and errors</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modals -->
+  <div id="user-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">User Details</div>
+      <div id="user-modal-content"></div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="balance-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">Edit User Balance</div>
+      <div class="form-group">
+        <label class="form-label">New Balance ($)</label>
+        <input type="number" id="new-balance" class="form-input" step="0.01" min="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Reason (Optional)</label>
+        <input type="text" id="balance-reason" class="form-input" placeholder="Admin adjustment, bonus, correction, etc.">
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmBalanceUpdate()">Update Balance</button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const adminPassword = new URLSearchParams(window.location.search).get('password') || '*Trader354638#';
+    let currentEditUser = null;
+    
+    // Tab Management
+    function switchTab(tabName) {
+      // Remove active class from all tabs and content
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      
+      // Add active class to selected tab and content
+      document.querySelector(\`button[onclick="switchTab('\${tabName}')"]\`).classList.add('active');
+      document.getElementById(tabName + '-tab').classList.add('active');
+    }
+    
+    // User Management Functions
+    function searchUsers(query) {
+      const table = document.getElementById('users-table');
+      const rows = table.querySelectorAll('tbody tr');
+      
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const matches = text.includes(query.toLowerCase());
+        row.style.display = matches ? '' : 'none';
+      });
+    }
+    
+    async function viewUser(userId) {
+      try {
+        showMessage('Loading user details...', 'info');
+        const response = await fetch(\`/api/admin/users?password=\${encodeURIComponent(adminPassword)}\`);
+        const data = await response.json();
+        
+        if (!data.success) throw new Error(data.error);
+        
+        const user = data.users.find(u => u.id == userId);
+        if (!user) throw new Error('User not found');
+        
+        const modalContent = document.getElementById('user-modal-content');
+        modalContent.innerHTML = \`
+          <div class="form-group">
+            <strong>User ID:</strong> \${user.id}
+          </div>
+          <div class="form-group">
+            <strong>Name:</strong> \${user.firstName} \${user.lastName || ''}
+          </div>
+          <div class="form-group">
+            <strong>Balance:</strong> $\${user.balance.toFixed(2)}
+          </div>
+          <div class="form-group">
+            <strong>Status:</strong> \${user.status || 'active'}
+          </div>
+          <div class="form-group">
+            <strong>Joined:</strong> \${new Date(user.created_at).toLocaleString()}
+          </div>
+          <div class="form-group">
+            <strong>Last Update:</strong> \${new Date(user.updated_at).toLocaleString()}
+          </div>
+          <div class="form-group">
+            <strong>Total Transactions:</strong> \${user.transactions ? user.transactions.length : 0}
+          </div>
+        \`;
+        
+        document.getElementById('user-modal').classList.add('active');
+        clearMessages();
+      } catch (error) {
+        showMessage('Error loading user: ' + error.message, 'error');
+      }
+    }
+    
+    function editBalance(userId, currentBalance) {
+      currentEditUser = { id: userId, balance: currentBalance };
+      document.getElementById('new-balance').value = currentBalance;
+      document.getElementById('balance-reason').value = '';
+      document.getElementById('balance-modal').classList.add('active');
+    }
+    
+    async function confirmBalanceUpdate() {
+      if (!currentEditUser) return;
+      
+      const newBalance = parseFloat(document.getElementById('new-balance').value);
+      const reason = document.getElementById('balance-reason').value.trim();
+      
+      if (isNaN(newBalance) || newBalance < 0) {
+        showMessage('Please enter a valid balance amount', 'error');
+        return;
+      }
+      
+      try {
+        document.querySelector('.modal-content').classList.add('loading');
+        
+        const response = await fetch(\`/api/admin/user/balance?password=\${encodeURIComponent(adminPassword)}\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: parseInt(currentEditUser.id),
+            newBalance: newBalance,
+            reason: reason || 'Admin balance adjustment'
+          })
+        });
+        
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error);
+        
+        showMessage(\`Balance updated successfully! New balance: $\${newBalance.toFixed(2)}\`, 'success');
+        closeModal();
+        setTimeout(() => location.reload(), 1500);
+        
+      } catch (error) {
+        showMessage('Error updating balance: ' + error.message, 'error');
+      } finally {
+        document.querySelector('.modal-content').classList.remove('loading');
+      }
+    }
+    
+    async function toggleStatus(userId, currentStatus) {
+      const newStatus = currentStatus === 'blocked' ? 'active' : 'blocked';
+      const action = newStatus === 'blocked' ? 'block' : 'unblock';
+      
+      if (!confirm(\`Are you sure you want to \${action} user \${userId}?\`)) return;
+      
+      try {
+        showMessage(\`\${action.charAt(0).toUpperCase() + action.slice(1)}ing user...\`, 'info');
+        
+        const response = await fetch(\`/api/admin/user/status?password=\${encodeURIComponent(adminPassword)}\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: parseInt(userId),
+            status: newStatus,
+            reason: \`Admin \${action} action\`
+          })
+        });
+        
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error);
+        
+        showMessage(\`User \${action}ed successfully!\`, 'success');
+        setTimeout(() => location.reload(), 1500);
+        
+      } catch (error) {
+        showMessage('Error updating user status: ' + error.message, 'error');
+      }
+    }
+    
+    // Deposit Management
+    async function approveDeposit(userId, transactionId) {
+      if (!confirm('Are you sure you want to approve this deposit?')) return;
+      
+      try {
+        showMessage('Approving deposit...', 'info');
+        
+        const response = await fetch('/api/approve-deposit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: parseInt(userId),
+            transactionId: transactionId
+          })
+        });
+        
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error);
+        
+        showMessage(\`Deposit approved! New balance: $\${data.newBalance.toFixed(2)}\`, 'success');
+        setTimeout(() => location.reload(), 1500);
+        
+      } catch (error) {
+        showMessage('Error approving deposit: ' + error.message, 'error');
+      }
+    }
+    
+    function rejectDeposit(userId, transactionId) {
+      const reason = prompt('Enter rejection reason (optional):');
+      if (reason === null) return; // User cancelled
+      
+      fetch(\`/api/admin/reject-deposit?password=\${encodeURIComponent(adminPassword)}\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          depositId: transactionId,
+          reason: reason || 'Rejected by admin'
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showMessage('Deposit rejected successfully!', 'success');
+          refreshDashboard();
+        } else {
+          showMessage(data.error || 'Failed to reject deposit', 'error');
+        }
+      })
+      .catch(error => {
+        console.error('Error rejecting deposit:', error);
+        showMessage('Failed to reject deposit', 'error');
+      });
+    }
+
+    // Withdrawal Management
+    async function approveWithdrawal(userId, transactionId) {
+      if (!confirm('Are you sure you want to approve this withdrawal?\\nThis will deduct the amount from the user\\'s balance.')) return;
+      
+      try {
+        showMessage('Approving withdrawal...', 'info');
+        
+        const response = await fetch('/api/approve-withdraw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: parseInt(userId),
+            transactionId: transactionId
+          })
+        });
+        
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error);
+        
+        showMessage(\`Withdrawal approved! New balance: $\${data.newBalance.toFixed(2)}\`, 'success');
+        setTimeout(() => location.reload(), 1500);
+        
+      } catch (error) {
+        showMessage('Error approving withdrawal: ' + error.message, 'error');
+      }
+    }
+    
+    function rejectWithdrawal(userId, transactionId) {
+      const reason = prompt('Enter rejection reason (optional):');
+      if (reason === null) return; // User cancelled
+      
+      if (!confirm('Are you sure you want to reject this withdrawal?')) return;
+      
+      fetch(\`/api/admin/reject-withdraw?password=\${encodeURIComponent(adminPassword)}\`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          withdrawalId: transactionId,
+          reason: reason || 'Rejected by admin'
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          showMessage('Withdrawal rejected successfully!', 'success');
+          refreshDashboard();
+        } else {
+          showMessage(data.error || 'Failed to reject withdrawal', 'error');
+        }
+      })
+      .catch(error => {
+        console.error('Error rejecting withdrawal:', error);
+        showMessage('Failed to reject withdrawal', 'error');
+      });
+    }
+
+    async function completeWithdrawal(withdrawalId) {
+      const txHash = prompt('Enter transaction hash (optional):');
+      if (txHash === null) return; // User cancelled
+      
+      if (!confirm('Are you sure you want to mark this withdrawal as completed?')) return;
+      
+      try {
+        showMessage('Completing withdrawal...', 'info');
+        
+        const response = await fetch(\`/api/admin/complete-withdrawal?password=\${encodeURIComponent(adminPassword)}\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            withdrawalId: withdrawalId,
+            txHash: txHash || undefined
+          })
+        });
+        
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error);
+        
+        showMessage('Withdrawal completed successfully!', 'success');
+        refreshDashboard();
+        
+      } catch (error) {
+        console.error('Error completing withdrawal:', error);
+        showMessage('Failed to complete withdrawal: ' + error.message, 'error');
+      }
+    }
+    
+    // Utility Functions
+    function closeModal() {
+      document.querySelectorAll('.modal').forEach(modal => modal.classList.remove('active'));
+      currentEditUser = null;
+    }
+    
+    function showMessage(message, type = 'info') {
+      clearMessages();
+      const messageEl = document.createElement('div');
+      messageEl.className = type === 'error' ? 'error-message' : 'success-message';
+      messageEl.textContent = message;
+      document.querySelector('.admin-container').insertBefore(messageEl, document.querySelector('.admin-container').firstChild);
+      
+      if (type !== 'error') {
+        setTimeout(clearMessages, 5000);
+      }
+    }
+    
+    function clearMessages() {
+      document.querySelectorAll('.success-message, .error-message').forEach(el => el.remove());
+    }
+    
+    function refreshDashboard() {
+      location.reload();
+    }
+    
+    function exportData() {
+      alert('Data export feature coming soon...');
+    }
+    
+    function exportUsers() {
+      alert('User export feature coming soon...');
+    }
+    
+    function systemMaintenance() {
+      alert('System maintenance feature coming soon...');
+    }
+    
+    function viewLogs() {
+      alert('System logs feature coming soon...');
+    }
+    
+    // Event Listeners
+    document.addEventListener('click', (e) => {
+      if (e.target.classList.contains('modal')) {
+        closeModal();
+      }
+    });
+    
+    // Auto-refresh every 2 minutes
+    setTimeout(() => {
+      location.reload();
+    }, 120000);
+    
+    // Initialize
+    console.log('Admin Dashboard Loaded');
+  </script>
+</body>
+</html>`;
+
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+  });
+}
+
+async function getAllUsers(env: Env): Promise<any[]> {
+  try {
+    const users: any[] = [];
+    const list = await env.TRADING_KV.list({ prefix: 'user:' });
+    
+    for (const key of list.keys) {
+      try {
+        const userData = await env.TRADING_KV.get(key.name);
+        if (userData) {
+          const user = JSON.parse(userData);
+          
+          // Ensure all required fields exist
+          user.firstName = user.firstName || 'Unknown';
+          user.lastName = user.lastName || '';
+          user.balance = user.balance || 0;
+          user.status = user.status || 'active';
+          user.created_at = user.created_at || user.createdAt || new Date().toISOString();
+          user.updated_at = user.updated_at || user.updatedAt || new Date().toISOString();
+          user.transactions = user.transactions || [];
+          
+          // Calculate statistics
+          const tradeTransactions = user.transactions.filter((t: any) => t.type === 'TRADE_PNL');
+          user.trades = tradeTransactions.length;
+          user.pnl = user.balance - 10000; // P&L from starting balance
+          
+          // Calculate total P&L from trade transactions
+          const tradePnL = tradeTransactions.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
+          user.tradePnL = tradePnL;
+          
+          users.push(user);
+        }
+      } catch (e) {
+        console.error('Error parsing user data:', e);
+      }
+    }
+    
+    return users.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    return [];
+  }
+}
+
+async function getAdminStats(env: Env, users: any[]): Promise<any> {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  return {
+    totalUsers: users.length,
+    newUsersToday: users.filter(u => new Date(u.createdAt) >= today).length,
+    totalBalance: users.reduce((sum, u) => sum + (u.balance || 0), 0),
+    totalTrades: users.reduce((sum, u) => sum + (u.trades || 0), 0),
+    activeUsers: users.filter(u => u.status !== 'blocked').length
+  };
+}
+
+// getUserData / saveUserData centralized in data/users.ts
+
