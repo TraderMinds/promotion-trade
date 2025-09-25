@@ -801,8 +801,10 @@ export default {
             return errorResponse('User not found', requestId, 404, 'USER_NOT_FOUND');
           }
           
-          if (!user.telegramId) {
-            return errorResponse('User has no Telegram ID', requestId, 400, 'NO_TELEGRAM_ID');
+          // Use user.id as the Telegram ID (since that's their Telegram user ID)
+          const telegramId = user.telegramId || user.id;
+          if (!telegramId) {
+            return errorResponse('User has no Telegram ID. User may not have started the bot yet.', requestId, 400, 'NO_TELEGRAM_ID');
           }
           
           // Send message via Telegram bot
@@ -813,7 +815,7 @@ export default {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                chat_id: user.telegramId,
+                chat_id: telegramId,
                 text: telegramMessage,
                 parse_mode: 'Markdown'
               })
@@ -2292,7 +2294,11 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
         
       } catch (error) {
         console.error('Error sending message:', error);
-        showMessage('Error sending message: ' + error.message, 'error');
+        let errorMsg = error.message;
+        if (errorMsg.includes('no Telegram ID')) {
+          errorMsg = 'Cannot send message: User has not started the Telegram bot yet. Ask them to message @YourBotName with /start first.';
+        }
+        showMessage('Error sending message: ' + errorMsg, 'error');
       } finally {
         document.querySelector('.modal-content').classList.remove('loading');
       }
