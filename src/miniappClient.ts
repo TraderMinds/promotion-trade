@@ -1057,7 +1057,7 @@ export function getMiniAppClientScript(baseUrl: string): string {
 `            \n` +
 `            // Separate by transaction type\n` +
 `            serverDeposits = serverTransactions.filter(tx => tx.type === 'DEPOSIT' && (tx.status === 'APPROVED' || tx.meta?.status === 'approved'));\n` +
-`            serverWithdrawals = serverTransactions.filter(tx => tx.type === 'WITHDRAW' && (tx.status === 'COMPLETED' || tx.status === 'PROCESSING'));\n` +
+`            serverWithdrawals = serverTransactions.filter(tx => tx.type === 'WITHDRAW');\n` +
 `          }\n` +
 `        } catch (error) {\n` +
 `          console.error('[MiniApp] Failed to load server transactions:', error);\n` +
@@ -1074,7 +1074,8 @@ export function getMiniAppClientScript(baseUrl: string): string {
 `      \n` +
 `      // Calculate financial breakdown\n` +
 `      const totalDeposits = serverDeposits.reduce((sum, tx) => sum + tx.amount, 0);\n` +
-`      const totalWithdrawals = Math.abs(serverWithdrawals.reduce((sum, tx) => sum + tx.amount, 0));\n` +
+`      const approvedWithdrawals = serverWithdrawals.filter(tx => tx.status === 'PROCESSING' || tx.status === 'COMPLETED');\n` +
+`      const totalWithdrawals = Math.abs(approvedWithdrawals.reduce((sum, tx) => sum + tx.amount, 0));\n` +
 `      const giftBonus = 10; // Welcome gift bonus\n` +
 `      \n` +
 `      // Calculate trading statistics\n` +
@@ -1478,14 +1479,17 @@ export function getMiniAppClientScript(baseUrl: string): string {
 `      }\n` +
 `      \n` +
 `      container.innerHTML = withdrawals.map(withdrawal => {\n` +
-`        const statusClass = withdrawal.status === 'COMPLETED' ? 'status-completed' : 'status-processing';\n` +
-`        const statusText = withdrawal.status === 'COMPLETED' ? 'Completed' : 'Processing';\n` +
+`        const statusClass = withdrawal.status === 'COMPLETED' ? 'status-completed' : \n` +
+`                           withdrawal.status === 'UNDER_REVIEW' ? 'status-under-review' : 'status-processing';\n` +
+`        const statusText = withdrawal.status === 'COMPLETED' ? 'Completed' : \n` +
+`                          withdrawal.status === 'UNDER_REVIEW' ? 'Under Review' : 'Processing';\n` +
 `        const address = withdrawal.metadata?.address || 'N/A';\n` +
+`        const displayAmount = Math.abs(withdrawal.amount); // Always show as positive, then add negative sign\n` +
 `        \n` +
 `        return \`\n` +
 `          <div class="wallet-transaction">\n` +
 `            <div class="transaction-details">\n` +
-`              <div class="transaction-amount">-$\${withdrawal.amount.toFixed(2)} USD</div>\n` +
+`              <div class="transaction-amount">-$\${displayAmount.toFixed(2)} USD</div>\n` +
 `              <div class="transaction-date">\${new Date(withdrawal.timestamp).toLocaleDateString()}</div>\n` +
 `              <div style="font-size:11px;color:#64748b;margin-top:2px">\${address.substring(0, 10)}...\${address.substring(-6)}</div>\n` +
 `            </div>\n` +

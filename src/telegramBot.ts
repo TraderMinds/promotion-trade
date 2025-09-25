@@ -51,7 +51,7 @@ interface UserProfile {
 }
 
 const REQUIRED_GROUP_ID = "-1003071589642";
-const SUPPORT_USERNAME = "@alexanderjesrsi";
+const SUPPORT_USERNAME = "@CryptoAlexanderJ";
 
 export async function handleTelegramUpdate(update: TelegramUpdate, env: any): Promise<Response> {
   try {

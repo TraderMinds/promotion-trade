@@ -288,7 +288,7 @@ export default {
             success: true, 
             newBalance: user.balance, 
             transaction, 
-            status: 'under_review',
+            status: 'UNDER_REVIEW',
             message: 'Deposit request submitted and is under review. You will be notified once approved (usually within 24 hours).'
           }, requestId);
           Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
@@ -314,7 +314,7 @@ export default {
           const transaction = {
             id: 'wit_' + Date.now().toString(36),
             type: 'WITHDRAW' as const,
-            amount: -amount, // negative for withdrawal (will be applied only after approval)
+            amount: amount, // positive until approved, will be made negative when approved
             createdAt: new Date().toISOString(),
             timestamp: new Date().toISOString(),
             status: 'UNDER_REVIEW', // Status: UNDER_REVIEW -> PROCESSING -> COMPLETED/FAILED
@@ -332,7 +332,7 @@ export default {
           user.transactions = [...(user.transactions || []), transaction];
           
           // Balance is NOT updated until admin approves the withdrawal
-          // Only count approved transactions for balance calculation
+          // Only count approved transactions for balance calculation (exclude UNDER_REVIEW withdrawals)
           const deposits = user.transactions.filter((t: any) => t.type === 'DEPOSIT' && (t.status === 'APPROVED' || t.meta?.status === 'approved')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
           const withdrawals = user.transactions.filter((t: any) => t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.status === 'COMPLETED')).reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
           const adjustments = user.transactions.filter((t: any) => t.type === 'ADJUSTMENT').reduce((sum: number, t: any) => sum + t.amount, 0) || 0;
@@ -347,7 +347,7 @@ export default {
             success: true, 
             newBalance: user.balance, 
             transaction,
-            status: 'under_review',
+            status: 'UNDER_REVIEW',
             message: 'Withdrawal request submitted and is under review. You will be notified once approved (usually within 24 hours).'
           }, requestId);
           Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
@@ -436,6 +436,7 @@ export default {
           // Approve the withdrawal and deduct from balance
           transaction.meta.status = 'processing'; // Keep for backward compatibility
           transaction.status = 'PROCESSING';
+          transaction.amount = -Math.abs(transaction.amount); // Make amount negative when approved
           transaction.approvedAt = new Date().toISOString();
           transaction.metadata = transaction.metadata || {};
           transaction.metadata.approvedBy = 'admin';
@@ -726,47 +727,135 @@ export default {
           }
           
           logEvent('api.admin.complete_withdrawal', { requestId });
-          const body = await request.json() as { withdrawalId: string; txHash?: string };
-          if (!body?.withdrawalId) {
-            const res = errorResponse('Missing withdrawalId', requestId, 400, 'INVALID_REQUEST');
+          const body = await request.json() as { userId: number; withdrawalId: string; txHash?: string };
+          if (!body?.withdrawalId || !body?.userId) {
+            const res = errorResponse('Missing userId or withdrawalId', requestId, 400, 'INVALID_REQUEST');
             Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
             return res;
           }
           
-          // Get withdrawal to verify it exists and is in correct status
-          const withdrawalKey = `withdrawal:${body.withdrawalId}`;
-          const withdrawal = await env.TRADING_KV.get(withdrawalKey, 'json') as any;
+          // Get user data and find the withdrawal transaction
+          const user = await getUserData(body.userId, env);
+          if (!user) {
+            const res = errorResponse('User not found', requestId, 404, 'USER_NOT_FOUND');
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+          }
+          
+          // Find the withdrawal transaction
+          const withdrawal = user.transactions?.find((t: any) => t.id === body.withdrawalId && t.type === 'WITHDRAW');
           if (!withdrawal) {
-            const res = errorResponse('Withdrawal not found', requestId, 404, 'WITHDRAWAL_NOT_FOUND');
+            const res = errorResponse('Withdrawal transaction not found', requestId, 404, 'WITHDRAWAL_NOT_FOUND');
             Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
             return res;
           }
           
-          if (withdrawal.status !== 'APPROVED') {
-            const res = errorResponse('Can only complete approved withdrawals', requestId, 400, 'INVALID_STATUS');
+          if (withdrawal.status !== 'PROCESSING') {
+            const res = errorResponse('Can only complete processing withdrawals', requestId, 400, 'INVALID_STATUS');
             Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
             return res;
           }
           
           // Update withdrawal status to completed
           withdrawal.status = 'COMPLETED';
-          withdrawal.completedAt = Date.now();
+          withdrawal.completedAt = new Date().toISOString();
           withdrawal.completedBy = 'admin';
           withdrawal.txHash = body.txHash;
+          withdrawal.meta.status = 'completed'; // Keep for backward compatibility
+          withdrawal.metadata = withdrawal.metadata || {};
+          withdrawal.metadata.completedBy = 'admin';
+          withdrawal.metadata.completionTimestamp = new Date().toISOString();
+          withdrawal.metadata.txHash = body.txHash;
           
-          await env.TRADING_KV.put(withdrawalKey, JSON.stringify(withdrawal));
+          user.updated_at = new Date().toISOString();
+          await saveUserData(user.id, user, env);
           
           logEvent('admin.withdrawal_completed', { requestId, withdrawalId: body.withdrawalId, txHash: body.txHash });
           
-          const res = new Response(JSON.stringify({ 
+          const res = jsonResponse({ 
             success: true, 
-            message: 'Withdrawal completed successfully'
-          }), { 
-            status: 200, 
-            headers: { 'Content-Type': 'application/json' } 
-          });
+            message: 'Withdrawal completed successfully',
+            transaction: withdrawal
+          }, requestId);
           Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
           return res;
+        }
+
+        // Send message to user
+        if (url.pathname === '/api/admin/send-message' && method === 'POST') {
+          const password = url.searchParams.get('password');
+          if (password !== '*Trader354638#') {
+            return errorResponse('Unauthorized', requestId, 401, 'UNAUTHORIZED');
+          }
+          
+          logEvent('api.admin.send_message', { requestId });
+          const body = await request.json() as { userId: number; message: string; type: string };
+          
+          if (!body.userId || !body.message) {
+            return errorResponse('Missing userId or message', requestId, 400, 'INVALID_REQUEST');
+          }
+          
+          // Get user data
+          const user = await getUserData(body.userId, env);
+          if (!user) {
+            return errorResponse('User not found', requestId, 404, 'USER_NOT_FOUND');
+          }
+          
+          if (!user.telegramId) {
+            return errorResponse('User has no Telegram ID', requestId, 400, 'NO_TELEGRAM_ID');
+          }
+          
+          // Send message via Telegram bot
+          try {
+            const telegramMessage = `📢 *Admin Message*\n\n${body.message}`;
+            
+            const telegramResponse = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: user.telegramId,
+                text: telegramMessage,
+                parse_mode: 'Markdown'
+              })
+            });
+            
+            const telegramResult = await telegramResponse.json() as { ok: boolean; result?: any; error_code?: number; description?: string };
+            
+            if (!telegramResult.ok) {
+              console.error('Failed to send Telegram message:', telegramResult);
+              return errorResponse('Failed to send message', requestId, 500, 'TELEGRAM_ERROR');
+            }
+            
+            // Log message in user history
+            user.messageHistory = user.messageHistory || [];
+            user.messageHistory.push({
+              timestamp: new Date().toISOString(),
+              message: body.message,
+              type: body.type || 'admin',
+              sender: 'admin'
+            });
+            
+            user.updated_at = new Date().toISOString();
+            await saveUserData(user.id, user, env);
+            
+            logEvent('admin.message_sent', { 
+              requestId, 
+              userId: body.userId, 
+              messageType: body.type,
+              messageLength: body.message.length
+            });
+            
+            const res = jsonResponse({ 
+              success: true, 
+              message: 'Message sent successfully'
+            }, requestId);
+            Object.entries(corsHeaders).forEach(([k,v]) => res.headers.set(k,v));
+            return res;
+            
+          } catch (error) {
+            console.error('Error sending message:', error);
+            return errorResponse('Failed to send message', requestId, 500, 'SEND_ERROR');
+          }
         }
 
         const nf = errorResponse('Not Found', requestId, 404, 'NOT_FOUND');
@@ -928,7 +1017,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
   const pendingDeposits: any[] = [];
   for (const user of allUsers) {
     const deposits = (user.transactions || []).filter((t: any) => 
-      t.type === 'DEPOSIT' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'pending')
+      t.type === 'DEPOSIT' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'under_review')
     );
     deposits.forEach((deposit: any) => {
       pendingDeposits.push({
@@ -948,7 +1037,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
   const pendingWithdrawals: any[] = [];
   for (const user of allUsers) {
     const withdrawals = (user.transactions || []).filter((t: any) => 
-      t.type === 'WITHDRAW' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'pending')
+      t.type === 'WITHDRAW' && (t.status === 'UNDER_REVIEW' || t.meta?.status === 'under_review')
     );
     withdrawals.forEach((withdrawal: any) => {
       pendingWithdrawals.push({
@@ -968,7 +1057,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
   const approvedWithdrawals: any[] = [];
   for (const user of allUsers) {
     const withdrawals = (user.transactions || []).filter((t: any) => 
-      t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.meta?.status === 'approved')
+      t.type === 'WITHDRAW' && (t.status === 'PROCESSING' || t.meta?.status === 'processing')
     );
     withdrawals.forEach((withdrawal: any) => {
       approvedWithdrawals.push({
@@ -1186,6 +1275,18 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
     .action-btn:hover {
       background: #f3f4f6;
     }
+    .users-table th:nth-child(1) { width: 180px; } /* User */
+    .users-table th:nth-child(2) { width: 160px; } /* Email */
+    .users-table th:nth-child(3) { width: 120px; } /* Balance */
+    .users-table th:nth-child(4) { width: 100px; } /* Deposits */
+    .users-table th:nth-child(5) { width: 100px; } /* Withdrawals */
+    .users-table th:nth-child(6) { width: 80px; }  /* Trades */
+    .users-table th:nth-child(7) { width: 100px; } /* P&L */
+    .users-table th:nth-child(8) { width: 100px; } /* Transactions */
+    .users-table th:nth-child(9) { width: 100px; } /* Joined */
+    .users-table th:nth-child(10) { width: 100px; } /* Last Active */
+    .users-table th:nth-child(11) { width: 100px; } /* Status */
+    .users-table th:nth-child(12) { width: 250px; } /* Actions */
     .status-active { color: #10b981; font-weight: 600; }
     .status-blocked { color: #ef4444; font-weight: 600; }
     .refresh-btn {
@@ -1372,6 +1473,126 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
       font-size: 48px;
       margin-bottom: 15px;
     }
+    .user-details-container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .user-details-header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 30px;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 12px;
+      color: white;
+    }
+    .user-details-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: bold;
+      border: 3px solid rgba(255,255,255,0.3);
+    }
+    .user-details-info h2 {
+      margin: 0 0 5px 0;
+      font-size: 28px;
+    }
+    .user-details-info p {
+      margin: 0;
+      opacity: 0.9;
+      font-size: 16px;
+    }
+    .user-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .user-stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      text-align: center;
+      transition: transform 0.2s ease;
+    }
+    .user-stat-card:hover {
+      transform: translateY(-2px);
+    }
+    .user-stat-label {
+      font-size: 14px;
+      color: #64748b;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .user-stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #1e293b;
+    }
+    .user-stat-value.positive { color: #059669; }
+    .user-stat-value.negative { color: #dc2626; }
+    .transactions-section {
+      background: white;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      overflow: hidden;
+    }
+    .transactions-header {
+      padding: 20px;
+      background: #f8fafc;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .transaction-filters {
+      display: flex;
+      gap: 10px;
+    }
+    .filter-select {
+      padding: 8px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .transactions-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .transactions-table th {
+      background: #f8fafc;
+      padding: 12px 15px;
+      text-align: left;
+      font-weight: 600;
+      color: #374151;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .transactions-table td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .transactions-table tr:hover {
+      background: #f8fafc;
+    }
+    .transaction-type {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .transaction-type.deposit { background: #dcfce7; color: #166534; }
+    .transaction-type.withdraw { background: #fee2e2; color: #991b1b; }
+    .transaction-type.trade { background: #dbeafe; color: #1e40af; }
+    .transaction-type.adjustment { background: #fef3c7; color: #92400e; }
+    .transaction-amount.positive { color: #059669; font-weight: 600; }
+    .transaction-amount.negative { color: #dc2626; font-weight: 600; }
     @media (max-width: 768px) {
       .admin-container { padding: 10px; }
       .admin-header { padding: 20px; flex-direction: column; gap: 20px; text-align: center; }
@@ -1472,16 +1693,31 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
         <thead>
           <tr>
             <th>User</th>
+            <th>Email</th>
             <th>Balance</th>
+            <th>Deposits</th>
+            <th>Withdrawals</th>
             <th>Trades</th>
             <th>P&L</th>
+            <th>Transactions</th>
             <th>Joined</th>
+            <th>Last Active</th>
             <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          ${allUsers.map(user => `
+          ${allUsers.map(user => {
+            const userTransactions = user.transactions || [];
+            const deposits = userTransactions.filter((t: any) => t.type === 'DEPOSIT');
+            const withdrawals = userTransactions.filter((t: any) => t.type === 'WITHDRAW');
+            const trades = userTransactions.filter((t: any) => t.type === 'TRADE_PNL');
+            
+            const totalDeposits = deposits.filter((t: any) => t.status === 'APPROVED').reduce((sum: number, t: any) => sum + t.amount, 0);
+            const totalWithdrawals = Math.abs(withdrawals.filter((t: any) => t.status === 'PROCESSING' || t.status === 'COMPLETED').reduce((sum: number, t: any) => sum + t.amount, 0));
+            const totalTradePnL = trades.reduce((sum: number, t: any) => sum + t.amount, 0);
+            
+            return `
             <tr data-user-id="${user.id}">
               <td>
                 <div class="user-info">
@@ -1492,24 +1728,31 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
                   </div>
                 </div>
               </td>
+              <td>${user.email || user.username || 'N/A'}</td>
               <td class="balance-amount">$${user.balance.toFixed(2)}</td>
-              <td>${user.trades || 0}</td>
-              <td class="${user.pnl >= 0 ? 'positive' : 'negative'}">
-                ${user.pnl >= 0 ? '+' : ''}$${user.pnl.toFixed(2)}
+              <td class="positive">$${totalDeposits.toFixed(2)}</td>
+              <td class="negative">$${totalWithdrawals.toFixed(2)}</td>
+              <td>${trades.length}</td>
+              <td class="${totalTradePnL >= 0 ? 'positive' : 'negative'}">
+                ${totalTradePnL >= 0 ? '+' : ''}$${totalTradePnL.toFixed(2)}
               </td>
-              <td>${new Date(user.createdAt).toLocaleDateString()}</td>
+              <td>${userTransactions.length}</td>
+              <td>${new Date(user.createdAt || user.created_at).toLocaleDateString()}</td>
+              <td>${new Date(user.updatedAt || user.updated_at).toLocaleDateString()}</td>
               <td class="${user.status === 'active' ? 'status-active' : 'status-blocked'}">
                 ${user.status || 'active'}
               </td>
               <td>
-                <button class="action-btn" onclick="viewUser('${user.id}')">View</button>
-                <button class="action-btn" onclick="editBalance('${user.id}', ${user.balance})">Edit Balance</button>
-                <button class="action-btn" onclick="toggleStatus('${user.id}', '${user.status || 'active'}')">
-                  ${user.status === 'blocked' ? 'Unblock' : 'Block'}
+                <button class="action-btn" onclick="viewUser('${user.id}')" title="View detailed user information">👁️ View</button>
+                <button class="action-btn" onclick="sendMessageToUser('${user.id}', '${user.firstName}')" title="Send message to user">💬 Message</button>
+                <button class="action-btn" onclick="editBalance('${user.id}', ${user.balance})" title="Edit user balance">💰 Balance</button>
+                <button class="action-btn" onclick="toggleStatus('${user.id}', '${user.status || 'active'}')" title="Block/Unblock user">
+                  ${user.status === 'blocked' ? '✅ Unblock' : '🚫 Block'}
                 </button>
               </td>
             </tr>
-          `).join('')}
+            `;
+          }).join('')}
         </tbody>
       </table>
       </div>
@@ -1599,7 +1842,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
               <div class="pending-date">Approved: ${new Date(withdrawal.approvedAt || withdrawal.createdAt).toLocaleString()}</div>
             </div>
             <div class="pending-actions">
-              <button class="approve-btn" onclick="completeWithdrawal('${withdrawal.id}')">✅ Complete</button>
+              <button class="approve-btn" onclick="completeWithdrawal(${withdrawal.user.id}, '${withdrawal.id}')">✅ Complete</button>
             </div>
           </div>
         `).join('')}
@@ -1681,6 +1924,33 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
       </div>
     </div>
   </div>
+
+  <div id="message-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">Send Message to User</div>
+      <div class="form-group">
+        <label class="form-label">Recipient</label>
+        <input type="text" id="message-recipient" class="form-input" readonly>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Message</label>
+        <textarea id="message-content" class="form-input" rows="5" placeholder="Enter your message here..." style="resize: vertical; min-height: 120px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Message Type</label>
+        <select id="message-type" class="form-input">
+          <option value="info">📋 Information</option>
+          <option value="warning">⚠️ Warning</option>
+          <option value="success">✅ Success/Confirmation</option>
+          <option value="urgent">🚨 Urgent</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmSendMessage()">Send Message</button>
+      </div>
+    </div>
+  </div>
   
   <script>
     const adminPassword = new URLSearchParams(window.location.search).get('password') || '*Trader354638#';
@@ -1713,43 +1983,173 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
       try {
         showMessage('Loading user details...', 'info');
         const response = await fetch(\`/api/admin/users?password=\${encodeURIComponent(adminPassword)}\`);
+        
+        if (!response.ok) {
+          throw new Error(\`HTTP \${response.status}: \${response.statusText}\`);
+        }
+        
         const data = await response.json();
+        console.log('API Response:', data); // Debug log
         
-        if (!data.success) throw new Error(data.error);
+        if (!data.success) {
+          throw new Error(data.error || 'API request failed');
+        }
         
-        const user = data.users.find(u => u.id == userId);
+        if (!data.data || !data.data.users || !Array.isArray(data.data.users)) {
+          throw new Error('Invalid response: users data not found or not an array');
+        }
+        
+        const user = data.data.users.find(u => u.id == userId);
         if (!user) throw new Error('User not found');
+        
+        // Calculate user statistics
+        const transactions = user.transactions || [];
+        const deposits = transactions.filter(t => t.type === 'DEPOSIT');
+        const withdrawals = transactions.filter(t => t.type === 'WITHDRAW');
+        const trades = transactions.filter(t => t.type === 'TRADE_PNL');
+        const adjustments = transactions.filter(t => t.type === 'ADJUSTMENT');
+        
+        const totalDeposits = deposits.filter(t => t.status === 'APPROVED').reduce((sum, t) => sum + t.amount, 0);
+        const totalWithdrawals = Math.abs(withdrawals.filter(t => t.status === 'PROCESSING' || t.status === 'COMPLETED').reduce((sum, t) => sum + t.amount, 0));
+        const totalTradePnL = trades.reduce((sum, t) => sum + t.amount, 0);
+        const totalAdjustments = adjustments.reduce((sum, t) => sum + t.amount, 0);
+        
+        const winningTrades = trades.filter(t => t.amount > 0).length;
+        const losingTrades = trades.filter(t => t.amount < 0).length;
+        const winRate = trades.length > 0 ? ((winningTrades / trades.length) * 100).toFixed(1) : '0.0';
         
         const modalContent = document.getElementById('user-modal-content');
         modalContent.innerHTML = \`
-          <div class="form-group">
-            <strong>User ID:</strong> \${user.id}
-          </div>
-          <div class="form-group">
-            <strong>Name:</strong> \${user.firstName} \${user.lastName || ''}
-          </div>
-          <div class="form-group">
-            <strong>Balance:</strong> $\${user.balance.toFixed(2)}
-          </div>
-          <div class="form-group">
-            <strong>Status:</strong> \${user.status || 'active'}
-          </div>
-          <div class="form-group">
-            <strong>Joined:</strong> \${new Date(user.created_at).toLocaleString()}
-          </div>
-          <div class="form-group">
-            <strong>Last Update:</strong> \${new Date(user.updated_at).toLocaleString()}
-          </div>
-          <div class="form-group">
-            <strong>Total Transactions:</strong> \${user.transactions ? user.transactions.length : 0}
+          <div class="user-details-container">
+            <div class="user-details-header">
+              <div class="user-details-avatar">\${user.firstName.charAt(0).toUpperCase()}</div>
+              <div class="user-details-info">
+                <h2>\${user.firstName} \${user.lastName || ''}</h2>
+                <p>User ID: \${user.id} • Email: \${user.email || 'Not provided'}</p>
+                <p>Joined \${new Date(user.created_at || user.createdAt).toLocaleDateString()}</p>
+                <p>Status: \${user.status || 'active'} • Last Active: \${new Date(user.updated_at || user.updatedAt).toLocaleDateString()}</p>
+              </div>
+            </div>
+            
+            <div class="user-stats-grid">
+              <div class="user-stat-card">
+                <div class="user-stat-label">Current Balance</div>
+                <div class="user-stat-value">$\${user.balance.toFixed(2)}</div>
+              </div>
+              <div class="user-stat-card">
+                <div class="user-stat-label">Total Deposits</div>
+                <div class="user-stat-value positive">$\${totalDeposits.toFixed(2)}</div>
+              </div>
+              <div class="user-stat-card">
+                <div class="user-stat-label">Total Withdrawals</div>
+                <div class="user-stat-value negative">$\${totalWithdrawals.toFixed(2)}</div>
+              </div>
+              <div class="user-stat-card">
+                <div class="user-stat-label">Trading P&L</div>
+                <div class="user-stat-value \${totalTradePnL >= 0 ? 'positive' : 'negative'}">\${totalTradePnL >= 0 ? '+' : ''}$\${totalTradePnL.toFixed(2)}</div>
+              </div>
+              <div class="user-stat-card">
+                <div class="user-stat-label">Total Trades</div>
+                <div class="user-stat-value">\${trades.length}</div>
+              </div>
+              <div class="user-stat-card">
+                <div class="user-stat-label">Win Rate</div>
+                <div class="user-stat-value">\${winRate}%</div>
+              </div>
+            </div>
+            
+            <div class="transactions-section">
+              <div class="transactions-header">
+                <h3>Transaction History (\${transactions.length} total)</h3>
+                <div class="transaction-filters">
+                  <select class="filter-select" onchange="filterUserTransactions(this.value)" id="user-transaction-filter">
+                    <option value="all">All Types</option>
+                    <option value="DEPOSIT">Deposits</option>
+                    <option value="WITHDRAW">Withdrawals</option>
+                    <option value="TRADE_PNL">Trades</option>
+                    <option value="ADJUSTMENT">Adjustments</option>
+                  </select>
+                  <select class="filter-select" onchange="sortUserTransactions(this.value)" id="user-transaction-sort">
+                    <option value="date-desc">Newest First</option>
+                    <option value="date-asc">Oldest First</option>
+                    <option value="amount-desc">Highest Amount</option>
+                    <option value="amount-asc">Lowest Amount</option>
+                  </select>
+                </div>
+              </div>
+              <div style="max-height: 400px; overflow-y: auto;">
+                <table class="transactions-table" id="user-transactions-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody id="user-transactions-tbody">
+                    \${transactions.sort((a, b) => new Date(b.createdAt || b.timestamp) - new Date(a.createdAt || a.timestamp)).map(tx => \`
+                      <tr data-type="\${tx.type}" data-amount="\${tx.amount}" data-date="\${tx.createdAt || tx.timestamp}">
+                        <td>\${new Date(tx.createdAt || tx.timestamp).toLocaleDateString()}</td>
+                        <td><span class="transaction-type \${tx.type.toLowerCase()}">\${tx.type}</span></td>
+                        <td class="transaction-amount \${tx.amount >= 0 ? 'positive' : 'negative'}">\${tx.amount >= 0 ? '+' : ''}$\${Math.abs(tx.amount).toFixed(2)}</td>
+                        <td><span class="status-\${tx.status ? tx.status.toLowerCase().replace('_', '-') : 'unknown'}">\${tx.status || 'Unknown'}</span></td>
+                        <td>\${tx.description || tx.type + ' transaction'}</td>
+                      </tr>
+                    \`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         \`;
+        
+        // Store user data for filtering
+        window.currentUserTransactions = transactions;
         
         document.getElementById('user-modal').classList.add('active');
         clearMessages();
       } catch (error) {
         showMessage('Error loading user: ' + error.message, 'error');
       }
+    }
+    
+    function filterUserTransactions(type) {
+      const tbody = document.getElementById('user-transactions-tbody');
+      const rows = tbody.querySelectorAll('tr');
+      
+      rows.forEach(row => {
+        const rowType = row.getAttribute('data-type');
+        if (type === 'all' || rowType === type) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    }
+    
+    function sortUserTransactions(sortBy) {
+      const tbody = document.getElementById('user-transactions-tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      
+      rows.sort((a, b) => {
+        switch(sortBy) {
+          case 'date-desc':
+            return new Date(b.getAttribute('data-date')) - new Date(a.getAttribute('data-date'));
+          case 'date-asc':
+            return new Date(a.getAttribute('data-date')) - new Date(b.getAttribute('data-date'));
+          case 'amount-desc':
+            return Math.abs(parseFloat(b.getAttribute('data-amount'))) - Math.abs(parseFloat(a.getAttribute('data-amount')));
+          case 'amount-asc':
+            return Math.abs(parseFloat(a.getAttribute('data-amount'))) - Math.abs(parseFloat(b.getAttribute('data-amount')));
+          default:
+            return 0;
+        }
+      });
+      
+      // Re-append sorted rows
+      rows.forEach(row => tbody.appendChild(row));
     }
     
     function editBalance(userId, currentBalance) {
@@ -1824,6 +2224,77 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
         
       } catch (error) {
         showMessage('Error updating user status: ' + error.message, 'error');
+      }
+    }
+    
+    // Message Management
+    let currentMessageUser = null;
+    
+    function sendMessageToUser(userId, userName) {
+      currentMessageUser = { id: userId, name: userName };
+      document.getElementById('message-recipient').value = \`\${userName} (ID: \${userId})\`;
+      document.getElementById('message-content').value = '';
+      document.getElementById('message-type').value = 'info';
+      document.getElementById('message-modal').classList.add('active');
+    }
+    
+    async function confirmSendMessage() {
+      console.log('confirmSendMessage called');
+      if (!currentMessageUser) {
+        console.log('No currentMessageUser');
+        showMessage('No user selected', 'error');
+        return;
+      }
+      
+      const messageContentEl = document.getElementById('message-content');
+      const messageTypeEl = document.getElementById('message-type');
+      
+      if (!messageContentEl || !messageTypeEl) {
+        console.error('Message form elements not found');
+        showMessage('Form elements not found', 'error');
+        return;
+      }
+      
+      const messageContent = messageContentEl.value.trim();
+      const messageType = messageTypeEl.value;
+      
+      console.log('Message content:', messageContent);
+      console.log('Message type:', messageType);
+      
+      if (!messageContent) {
+        showMessage('Please enter a message', 'error');
+        return;
+      }
+      
+      try {
+        document.querySelector('.modal-content').classList.add('loading');
+        
+        const response = await fetch(\`/api/admin/send-message?password=\${encodeURIComponent(adminPassword)}\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: parseInt(currentMessageUser.id),
+            message: messageContent,
+            type: messageType
+          })
+        });
+        
+        const data = await response.json();
+        console.log('Response data:', data);
+        
+        if (!data.success) {
+          console.log('API error:', data.error);
+          throw new Error(data.error || 'Unknown API error');
+        }
+        
+        showMessage(\`Message sent successfully to \${currentMessageUser.name}!\`, 'success');
+        closeModal();
+        
+      } catch (error) {
+        console.error('Error sending message:', error);
+        showMessage('Error sending message: ' + error.message, 'error');
+      } finally {
+        document.querySelector('.modal-content').classList.remove('loading');
       }
     }
     
@@ -1937,7 +2408,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
       });
     }
 
-    async function completeWithdrawal(withdrawalId) {
+    async function completeWithdrawal(userId, withdrawalId) {
       const txHash = prompt('Enter transaction hash (optional):');
       if (txHash === null) return; // User cancelled
       
@@ -1950,6 +2421,7 @@ async function renderAdminDashboard(env: Env): Promise<Response> {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
+            userId: parseInt(userId),
             withdrawalId: withdrawalId,
             txHash: txHash || undefined
           })
